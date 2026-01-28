@@ -44,12 +44,16 @@ export default function DataEditorModal({
       newRow[key] = typeof data[0][key] === 'number' ? 100 : 'New Item';
     });
     setData([...data, newRow]);
-    setColors([...colors, '#3b82f6']);
+    if (currentColors.length > 1) {
+      setColors([...colors, '#3b82f6']);
+    }
   };
 
   const deleteRow = (index: number) => {
     setData(data.filter((_, i) => i !== index));
-    setColors(colors.filter((_, i) => i !== index));
+    if (currentColors.length > 1) {
+      setColors(colors.filter((_, i) => i !== index));
+    }
   };
 
   const handleSave = () => {
@@ -59,7 +63,8 @@ export default function DataEditorModal({
 
   if (!isOpen) return null;
 
-  const dataKeys = Object.keys(data[0] || {});
+  const dataKeys = Object.keys(data[0] || {}).filter(key => key !== 'comment');
+  const isSingleColor = currentColors.length === 1;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fadeIn">
@@ -79,7 +84,11 @@ export default function DataEditorModal({
         <div className="flex-1 overflow-auto p-6">
           <div className="space-y-3">
             <div className="flex gap-3 text-xs text-gray-400 font-medium mb-2">
-              <div className="w-16">COLOR</div>
+              {isSingleColor ? (
+                <div className="w-16">LINE COLOR</div>
+              ) : (
+                <div className="w-16">COLOR</div>
+              )}
               {dataKeys.map(key => (
                 <div key={key} className="flex-1 uppercase">
                   {key}
@@ -90,15 +99,32 @@ export default function DataEditorModal({
 
             {data.map((row, index) => (
               <div key={index} className="flex gap-3 items-center hover:bg-white/5 p-2 rounded-lg transition-all duration-200">
-                <div className="relative group">
-                  <input
-                    type="color"
-                    value={colors[index] || '#3b82f6'}
-                    onChange={(e) => handleColorChange(index, e.target.value)}
-                    className="w-16 h-12 rounded-lg cursor-pointer border-2 border-white/20 hover:border-white/40 hover:scale-105 transition-all duration-200"
-                    style={{ backgroundColor: colors[index] }}
-                  />
-                </div>
+                {/* Color Picker - Only show on first row if single color mode */}
+                {isSingleColor ? (
+                  index === 0 ? (
+                    <div className="relative group">
+                      <input
+                        type="color"
+                        value={colors[0] || '#3b82f6'}
+                        onChange={(e) => handleColorChange(0, e.target.value)}
+                        className="w-16 h-12 rounded-lg cursor-pointer border-2 border-white/20 hover:border-white/40 hover:scale-105 transition-all duration-200"
+                        style={{ backgroundColor: colors[0] }}
+                      />
+                    </div>
+                  ) : (
+                    <div className="w-16"></div>
+                  )
+                ) : (
+                  <div className="relative group">
+                    <input
+                      type="color"
+                      value={colors[index] || '#3b82f6'}
+                      onChange={(e) => handleColorChange(index, e.target.value)}
+                      className="w-16 h-12 rounded-lg cursor-pointer border-2 border-white/20 hover:border-white/40 hover:scale-105 transition-all duration-200"
+                      style={{ backgroundColor: colors[index] }}
+                    />
+                  </div>
+                )}
 
                 {dataKeys.map(key => (
                   <input

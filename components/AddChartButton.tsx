@@ -1,67 +1,120 @@
 "use client";
 import { useState } from "react";
-import { Plus, PieChart, LineChart, BarChart3, TrendingUp } from "lucide-react";
+import { Plus } from "lucide-react";
 
 interface AddChartButtonProps {
   onAddChart: (type: string) => void;
 }
 
 export default function AddChartButton({ onAddChart }: AddChartButtonProps) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
 
-  const chartTypes = [
-    { name: "Pie Chart", icon: PieChart, color: "bg-blue-50 text-blue-600", type: "pie" },
-    { name: "Line Chart", icon: LineChart, color: "bg-green-50 text-green-600", type: "line" },
-    { name: "Bar Chart", icon: BarChart3, color: "bg-purple-50 text-purple-600", type: "bar" },
-    { name: "Trend Chart", icon: TrendingUp, color: "bg-orange-50 text-orange-600", type: "trend" },
-  ];
-
-  const handleAddChart = (type: string) => {
+  const handleMenuItemClick = (type: string) => {
     onAddChart(type);
-    setIsOpen(false);
+    setShowMenu(false);
   };
 
   return (
     <div className="relative">
       <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="w-10 h-10 rounded-lg bg-black text-white flex items-center justify-center hover:bg-gray-800 transition"
+        onClick={() => setShowMenu(!showMenu)}
+        className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white rounded-xl font-medium transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105"
       >
-        <Plus size={20} />
+        <Plus size={18} />
+        Add Widget
       </button>
 
-      {isOpen && (
+      {showMenu && (
         <>
           <div
-            className="fixed inset-0 z-10"
-            onClick={() => setIsOpen(false)}
+            className="fixed inset-0 z-40"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setShowMenu(false);
+            }}
           />
-
-          <div className="absolute top-12 right-0 w-64 bg-white rounded-xl shadow-2xl border z-20">
-            <div className="px-4 py-3 border-b">
-              <p className="font-semibold text-gray-900">Add Chart</p>
-              <p className="text-xs text-gray-500 mt-1">Choose a chart type</p>
-            </div>
-
-            <div className="p-2">
-              {chartTypes.map((chart) => {
-                const Icon = chart.icon;
-                return (
-                  <button
-                    key={chart.type}
-                    onClick={() => handleAddChart(chart.type)}
-                    className="w-full px-3 py-3 flex items-center gap-3 hover:bg-gray-50 rounded-lg transition"
-                  >
-                    <div className={`w-10 h-10 rounded-lg ${chart.color} flex items-center justify-center`}>
-                      <Icon size={18} />
-                    </div>
-                    <span className="text-sm font-medium text-gray-900">
-                      {chart.name}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+          <div 
+            className="absolute right-0 mt-2 w-48 bg-slate-800/95 backdrop-blur-xl rounded-xl border border-white/20 shadow-2xl overflow-hidden z-50"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleMenuItemClick("table");
+              }}
+              className="w-full px-4 py-3 text-left text-white hover:bg-white/10 transition-colors flex items-center gap-3"
+            >
+              <div className="w-2 h-2 rounded-full bg-indigo-500" />
+              Table
+            </button>
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleMenuItemClick("kpi");
+              }}
+              className="w-full px-4 py-3 text-left text-white hover:bg-white/10 transition-colors flex items-center gap-3"
+            >
+              <div className="w-2 h-2 rounded-full bg-cyan-500" />
+              KPI Card
+            </button>
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleMenuItemClick("line");
+              }}
+              className="w-full px-4 py-3 text-left text-white hover:bg-white/10 transition-colors flex items-center gap-3"
+            >
+              <div className="w-2 h-2 rounded-full bg-blue-500" />
+              Line Chart
+            </button>
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleMenuItemClick("bar");
+              }}
+              className="w-full px-4 py-3 text-left text-white hover:bg-white/10 transition-colors flex items-center gap-3"
+            >
+              <div className="w-2 h-2 rounded-full bg-purple-500" />
+              Bar Chart
+            </button>
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleMenuItemClick("pie");
+              }}
+              className="w-full px-4 py-3 text-left text-white hover:bg-white/10 transition-colors flex items-center gap-3"
+            >
+              <div className="w-2 h-2 rounded-full bg-pink-500" />
+              Pie Chart
+            </button>
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleMenuItemClick("trend");
+              }}
+              className="w-full px-4 py-3 text-left text-white hover:bg-white/10 transition-colors flex items-center gap-3"
+            >
+              <div className="w-2 h-2 rounded-full bg-orange-500" />
+              Trend Chart
+            </button>
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleMenuItemClick("text");
+              }}
+              className="w-full px-4 py-3 text-left text-white hover:bg-white/10 transition-colors flex items-center gap-3"
+            >
+              <div className="w-2 h-2 rounded-full bg-green-500" />
+              Text Box
+            </button>
           </div>
         </>
       )}
