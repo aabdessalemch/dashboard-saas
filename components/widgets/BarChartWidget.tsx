@@ -226,8 +226,8 @@ export default function BarChartWidget({
     document.addEventListener('mouseup', handleMouseUp);
   };
 
-  const maxValue = Math.max(...data.map(d => d.value));
-  const yAxisMax = Math.ceil(maxValue * 1.2);
+const maxValue = Math.max(...data.map((d: any) => d.value));
+const yAxisMax = Math.ceil(maxValue * 1.2);
   
   const getBarSize = () => {
     if (data.length <= 5) return 60;
