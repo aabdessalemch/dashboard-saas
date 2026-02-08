@@ -402,7 +402,7 @@ const yAxisMax = Math.ceil(maxValue * 1.2);
             <YAxis stroke="#fff" domain={[0, yAxisMax]} />
             {settings.showTooltip && <Tooltip content={<CustomTooltip />} />}
             <Bar dataKey="value" animationDuration={settings.animationDuration} radius={[8, 8, 0, 0]}>
-              {data.map((entry, index) => (
+              {data.map((entry: any, index: number) => (
                 <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />
               ))}
             </Bar>
