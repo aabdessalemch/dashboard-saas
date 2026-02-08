@@ -4,25 +4,31 @@ import { X } from "lucide-react";
 
 interface TextWidgetProps {
   onDelete: () => void;
+  onDuplicate?: () => void;
   onPositionChange?: (x: number, y: number) => void;
   onSizeChange?: (width: number, height: number) => void;
   onDataChange?: (data: any) => void;
+  onBringToFront?: () => void;
   initialX?: number;
   initialY?: number;
   initialWidth?: number;
   initialHeight?: number;
+  initialZIndex?: number;
   maxWidth?: number;
   initialData?: any;
 }
 
 export default function TextWidget({ 
   onDelete,
+  onDuplicate,
   onPositionChange, 
   onSizeChange,
   onDataChange,
+  onBringToFront,
   initialX = 0, 
   initialY = 0,
   initialWidth = 400,
+  initialZIndex = 1,
   maxWidth = 1200,
   initialData
 }: TextWidgetProps) {
@@ -36,6 +42,7 @@ export default function TextWidget({
   
   const [width, setWidth] = useState(initialWidth);
   const [position, setPosition] = useState({ x: initialX, y: initialY });
+  const [zIndex, setZIndex] = useState(initialZIndex);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
 
@@ -43,7 +50,6 @@ export default function TextWidget({
   const editorRef = useRef<HTMLDivElement>(null);
   const savedSelectionRef = useRef<Range | null>(null);
 
-  // Save current selection
   const saveSelection = () => {
     const selection = window.getSelection();
     if (selection && selection.rangeCount > 0) {
@@ -51,7 +57,6 @@ export default function TextWidget({
     }
   };
 
-  // Restore saved selection
   const restoreSelection = () => {
     if (savedSelectionRef.current) {
       const selection = window.getSelection();
@@ -76,6 +81,10 @@ export default function TextWidget({
     setIsInitialized(true);
   }, []);
 
+  useEffect(() => {
+    setZIndex(initialZIndex);
+  }, [initialZIndex]);
+
   const saveContent = () => {
     if (onDataChange && editorRef.current) {
       onDataChange({ 
@@ -92,10 +101,13 @@ export default function TextWidget({
   }, [boxBgColor, isInitialized]);
 
   const handleEditorClick = () => {
+    if (onBringToFront) {
+      onBringToFront();
+    }
+    
     setIsFocused(true);
     setShowToolbar(true);
     
-    // Smart positioning: check if toolbar will be visible at bottom, otherwise use top
     if (containerRef.current) {
       const rect = containerRef.current.getBoundingClientRect();
       const toolbarHeight = 60;
@@ -176,7 +188,6 @@ export default function TextWidget({
   const handleFontChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value;
     
-    // Restore selection and focus
     if (savedSelectionRef.current && editorRef.current) {
       editorRef.current.focus();
       const selection = window.getSelection();
@@ -186,7 +197,6 @@ export default function TextWidget({
       }
     }
     
-    // Now apply the font
     if (editorRef.current) {
       editorRef.current.focus();
       document.execCommand('fontName', false, value);
@@ -197,7 +207,6 @@ export default function TextWidget({
   const handleFontSizeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const size = e.target.value;
     
-    // Restore selection and focus
     if (savedSelectionRef.current && editorRef.current) {
       editorRef.current.focus();
       const selection = window.getSelection();
@@ -207,7 +216,6 @@ export default function TextWidget({
       }
     }
     
-    // Apply font size using a span wrapper since execCommand fontSize is limited
     if (editorRef.current) {
       editorRef.current.focus();
       
@@ -222,7 +230,6 @@ export default function TextWidget({
           span.appendChild(contents);
           range.insertNode(span);
           
-          // Select the span content
           range.selectNodeContents(span);
           selection.removeAllRanges();
           selection.addRange(range);
@@ -238,7 +245,6 @@ export default function TextWidget({
   const handleColorChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const color = e.target.value;
     
-    // Restore selection and focus
     if (savedSelectionRef.current && editorRef.current) {
       editorRef.current.focus();
       const selection = window.getSelection();
@@ -248,7 +254,6 @@ export default function TextWidget({
       }
     }
     
-    // Now apply the color
     if (editorRef.current) {
       editorRef.current.focus();
       document.execCommand('foreColor', false, color);
@@ -257,12 +262,10 @@ export default function TextWidget({
   };
 
   const startDrag = (e: React.MouseEvent) => {
-    // Don't drag if currently focused (editing mode)
     if (isFocused) {
       return;
     }
     
-    // Skip drag if clicking on buttons or input
     if ((e.target as HTMLElement)?.closest('button') || 
         (e.target as HTMLElement)?.closest('input') ||
         (e.target as HTMLElement)?.closest('select')) {
@@ -271,6 +274,10 @@ export default function TextWidget({
     
     e.preventDefault();
     e.stopPropagation();
+    
+    if (onBringToFront) {
+      onBringToFront();
+    }
     
     setIsDragging(true);
     const startX = e.clientX - position.x;
@@ -298,6 +305,11 @@ export default function TextWidget({
   const startResize = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    
+    if (onBringToFront) {
+      onBringToFront();
+    }
+    
     setIsResizing(true);
     
     const startX = e.clientX;
@@ -360,13 +372,17 @@ export default function TextWidget({
         position: 'absolute',
         left: `${position.x}px`,
         top: `${position.y}px`,
-        zIndex: isDragging ? 1000 : isFocused ? 999 : 1,
+        zIndex: isDragging ? 9999 : isFocused ? 999 : zIndex,
         backdropFilter: 'blur(10px)',
         backgroundColor: boxBgColor,
         transition: isDragging || isResizing ? 'none' : 'all 0.2s',
       }}
+      onMouseDownCapture={() => {
+        if (onBringToFront && !isFocused) {
+          onBringToFront();
+        }
+      }}
     >
-      {/* Drag Handle - same style as BarChart */}
       <div 
         onMouseDown={startDrag}
         className={`absolute top-0 left-0 right-0 h-3 ${
@@ -375,7 +391,6 @@ export default function TextWidget({
         style={{ borderRadius: '12px 12px 0 0' }}
       />
 
-      {/* Toolbar */}
       {showToolbar && (
         <div
           className={`absolute ${toolbarPosition === 'top' ? '-top-30' : '-bottom-30'} left-0 bg-slate-900 border border-white/30 rounded-lg shadow-xl px-2 py-1.5 flex items-center gap-2 flex-wrap`}
@@ -474,6 +489,21 @@ export default function TextWidget({
       )}
 
       <div className="absolute -top-2 -right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-all duration-200">
+        {onDuplicate && (
+          <button 
+            onClick={(e) => { 
+              e.stopPropagation(); 
+              onDuplicate(); 
+            }} 
+            className="w-7 h-7 bg-blue-500 hover:bg-blue-600 hover:scale-110 text-white rounded-full shadow-lg flex items-center justify-center transition-all"
+            title="Duplicate"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+          </button>
+        )}
         <button 
           onClick={(e) => { 
             e.stopPropagation(); 
@@ -498,13 +528,11 @@ export default function TextWidget({
           }
         }}
         onMouseUp={() => {
-          // Save selection after user finishes selecting text
           if (isFocused) {
             saveSelection();
           }
         }}
         onKeyUp={() => {
-          // Save selection after keyboard selection changes
           if (isFocused) {
             saveSelection();
           }

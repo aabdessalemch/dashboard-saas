@@ -12,10 +12,12 @@ interface PieChartWidgetProps {
   onPositionChange?: (x: number, y: number) => void;
   onSizeChange?: (width: number, height: number) => void;
   onDataChange?: (data: any) => void;
+  onBringToFront?: () => void;
   initialX?: number;
   initialY?: number;
   initialWidth?: number;
   initialHeight?: number;
+  initialZIndex?: number;
   maxWidth?: number;
   initialData?: any;
 }
@@ -26,10 +28,12 @@ export default function PieChartWidget({
   onPositionChange, 
   onSizeChange,
   onDataChange,
+  onBringToFront,
   initialX = 0, 
   initialY = 0,
   initialWidth = 450,
   initialHeight = 280,
+  initialZIndex = 1,
   maxWidth = 1200,
   initialData
 }: PieChartWidgetProps) {
@@ -57,9 +61,9 @@ export default function PieChartWidget({
   const [isResizing, setIsResizing] = useState(false);
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null);
   const [position, setPosition] = useState({ x: initialX, y: initialY });
+  const [zIndex, setZIndex] = useState(initialZIndex);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Load AI data on mount
   useEffect(() => {
     if (initialData) {
       if (initialData.title) setTitle(initialData.title);
@@ -68,6 +72,10 @@ export default function PieChartWidget({
       if (initialData.settings) setSettings(initialData.settings);
     }
   }, []);
+
+  useEffect(() => {
+    setZIndex(initialZIndex);
+  }, [initialZIndex]);
 
   const handleSaveData = (newData: any[], newColors: string[]) => {
     setData(newData);
@@ -111,6 +119,10 @@ export default function PieChartWidget({
     e.preventDefault();
     e.stopPropagation();
     
+    if (onBringToFront) {
+      onBringToFront();
+    }
+    
     setIsDragging(true);
     const startX = e.clientX - position.x;
     const startY = e.clientY - position.y;
@@ -137,6 +149,10 @@ export default function PieChartWidget({
   const startResize = (direction: string) => (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+
+    if (onBringToFront) {
+      onBringToFront();
+    }
 
     setIsResizing(true);
     const startX = e.clientX;
@@ -218,7 +234,12 @@ export default function PieChartWidget({
           position: 'absolute',
           left: `${position.x}px`,
           top: `${position.y}px`,
-          zIndex: isDragging ? 1000 : 1,
+          zIndex: isDragging ? 9999 : zIndex,
+        }}
+        onMouseDownCapture={() => {
+          if (onBringToFront) {
+            onBringToFront();
+          }
         }}
       >
         <div 

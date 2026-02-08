@@ -1,9 +1,20 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Sidebar from "@/components/Sidebar";
 import TopBar from "@/components/TopBar";
 import DashboardCanvas from "@/components/DashboardCanvas";
 import AIAssistant from "@/components/AIAssistant";
+import { supabase } from "@/lib/supabase";
+import { 
+  getProjects, 
+  createProject, 
+  getWidgets, 
+  createWidget, 
+  updateWidget, 
+  deleteWidget as dbDeleteWidget, 
+  deleteProject as dbDeleteProject, 
+  updateProject 
+} from "@/lib/database";
 
 export interface WidgetPosition {
   id: string;
@@ -13,323 +24,439 @@ export interface WidgetPosition {
   width: number;
   height: number;
   gridPosition: number;
+  zIndex?: number;
   data?: any;
+  dbId?: string;
 }
 
 interface Project {
   id: string;
   name: string;
-  widgets: WidgetPosition[];
 }
 
 export default function DashboardPage() {
   const [widgets, setWidgets] = useState<WidgetPosition[]>([]);
-  const [selectedProjectId, setSelectedProjectId] = useState("1");
-  const [selectedProjectName, setSelectedProjectName] = useState("Factory Scrap Analysis");
-  const [projects, setProjects] = useState<Project[]>([
-    { id: "1", name: "Factory Scrap Analysis", widgets: [] },
-    { id: "2", name: "Quality KPIs Dashboard", widgets: [] },
-    { id: "3", name: "Production Line A", widgets: [] },
-  ]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>("guest-1");
+  const [selectedProjectName, setSelectedProjectName] = useState("My Dashboard");
+  const [projects, setProjects] = useState<Project[]>([{ id: "guest-1", name: "My Dashboard" }]);
   const [isLoaded, setIsLoaded] = useState(false);
   const [showAIAssistant, setShowAIAssistant] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [isLoadingData, setIsLoadingData] = useState(true);
+  
+  const widgetsRef = useRef<WidgetPosition[]>([]);
+  const selectedProjectIdRef = useRef<string>("guest-1");
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isSavingRef = useRef(false);
 
   const DEFAULT_WIDTH = 450;
   const DEFAULT_HEIGHT = 280;
   const GAP_X = 30;
-  const GAP_Y = 100;
+  const GAP_Y = 30;
   const START_X = 20;
   const START_Y = 20;
   const COLS = 3;
 
   useEffect(() => {
-    const savedProjects = localStorage.getItem('dashgen_projects');
-    const savedSelectedId = localStorage.getItem('dashgen_selected_project');
-    
-    if (savedProjects) {
-      const parsedProjects = JSON.parse(savedProjects);
-      setProjects(parsedProjects);
+    widgetsRef.current = widgets;
+  }, [widgets]);
+
+  useEffect(() => {
+    selectedProjectIdRef.current = selectedProjectId;
+  }, [selectedProjectId]);
+
+  useEffect(() => {
+    const initializeUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
       
-      if (savedSelectedId) {
-        const selectedProject = parsedProjects.find((p: Project) => p.id === savedSelectedId);
-        if (selectedProject) {
-          setSelectedProjectId(selectedProject.id);
-          setSelectedProjectName(selectedProject.name);
-          setWidgets(selectedProject.widgets || []);
-        }
-      } else if (parsedProjects.length > 0) {
-        setSelectedProjectId(parsedProjects[0].id);
-        setSelectedProjectName(parsedProjects[0].name);
-        setWidgets(parsedProjects[0].widgets || []);
+      if (!user) {
+        setUserId(null);
+        setProjects([{ id: "guest-1", name: "My Dashboard" }]);
+        setSelectedProjectId("guest-1");
+        setSelectedProjectName("My Dashboard");
+        setWidgets([]);
+        setIsLoaded(true);
+        setIsLoadingData(false);
+        return;
       }
-    }
-    
-    setIsLoaded(true);
+
+      setUserId(user.id);
+      const userProjects = await getProjects(user.id);
+
+      if (userProjects.length === 0) {
+        const project1 = await createProject(user.id, "My First Dashboard");
+        if (project1) {
+          setProjects([project1]);
+          setSelectedProjectId(project1.id);
+          setSelectedProjectName(project1.name);
+          setWidgets([]);
+        }
+      } else {
+        setProjects(userProjects);
+        setSelectedProjectId(userProjects[0].id);
+        setSelectedProjectName(userProjects[0].name);
+        const dbWidgets = await getWidgets(userProjects[0].id);
+        const mappedWidgets = dbWidgets.map(w => ({
+          id: w.id, type: w.widget_type, x: w.x, y: w.y, width: w.width, height: w.height,
+          gridPosition: 0, zIndex: w.z_index, data: w.data, dbId: w.id,
+        }));
+        setWidgets(mappedWidgets);
+      }
+
+      setIsLoaded(true);
+      setIsLoadingData(false);
+    };
+
+    initializeUser();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event) => {
+      if (event === 'SIGNED_OUT') {
+        setUserId(null);
+        setProjects([{ id: "guest-1", name: "My Dashboard" }]);
+        setSelectedProjectId("guest-1");
+        setSelectedProjectName("My Dashboard");
+        setWidgets([]);
+        setIsLoaded(true);
+      } else if (event === 'SIGNED_IN') {
+        window.location.reload();
+      }
+    });
+
+    return () => authListener?.subscription.unsubscribe();
   }, []);
 
-  useEffect(() => {
-    if (isLoaded) {
-      localStorage.setItem('dashgen_projects', JSON.stringify(projects));
+  const saveToDatabase = useCallback(async (projectId: string, widgetsToSave: WidgetPosition[]) => {
+    if (!userId || projectId.startsWith('guest-') || projectId.startsWith('temp-')) return;
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(projectId)) return;
+    if (isSavingRef.current) return;
+
+    isSavingRef.current = true;
+
+    try {
+      const existingWidgets = await getWidgets(projectId);
+      const existingDbIds = new Set(existingWidgets.map(w => w.id));
+      const updatedIds = new Set<string>();
+
+      for (const widget of widgetsToSave) {
+        if (widget.dbId && existingDbIds.has(widget.dbId)) {
+          await updateWidget(widget.dbId, {
+            widget_type: widget.type, x: widget.x, y: widget.y, width: widget.width,
+            height: widget.height, z_index: widget.zIndex || 0, data: widget.data,
+          });
+          updatedIds.add(widget.dbId);
+        } else {
+          const created = await createWidget(projectId, userId, {
+            widget_type: widget.type, x: widget.x, y: widget.y, width: widget.width,
+            height: widget.height, z_index: widget.zIndex || 0, data: widget.data,
+          });
+          if (created) {
+            updatedIds.add(created.id);
+            widget.id = created.id;
+            widget.dbId = created.id;
+          }
+        }
+      }
+
+      for (const existingWidget of existingWidgets) {
+        if (!updatedIds.has(existingWidget.id)) {
+          await dbDeleteWidget(existingWidget.id);
+        }
+      }
+    } catch (error) {
+      console.error('Save error:', error);
+    } finally {
+      isSavingRef.current = false;
     }
-  }, [projects, isLoaded]);
+  }, [userId]);
+
+  const scheduleSave = useCallback(() => {
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(() => {
+      saveToDatabase(selectedProjectIdRef.current, widgetsRef.current);
+    }, 2000);
+  }, [saveToDatabase]);
 
   useEffect(() => {
-    if (isLoaded) {
-      localStorage.setItem('dashgen_selected_project', selectedProjectId);
-    }
-  }, [selectedProjectId, isLoaded]);
+    if (isLoaded && userId) scheduleSave();
+  }, [widgets, isLoaded, userId, scheduleSave]);
 
-  useEffect(() => {
-    if (isLoaded) {
-      setProjects(prevProjects => 
-        prevProjects.map(p => 
-          p.id === selectedProjectId 
-            ? { ...p, widgets: widgets }
-            : p
-        )
-      );
-    }
-  }, [widgets, selectedProjectId, isLoaded]);
+  const handleProjectSelect = async (projectId: string, projectName: string) => {
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    await saveToDatabase(selectedProjectIdRef.current, widgetsRef.current);
 
-  const checkCollision = (x: number, y: number, width: number, height: number, excludeId?: string) => {
-    return widgets.some(widget => {
-      if (excludeId && widget.id === excludeId) return false;
+    setSelectedProjectId(projectId);
+    setSelectedProjectName(projectName);
+
+    // Clear widgets for ANY non-UUID project
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!userId || !uuidRegex.test(projectId)) {
+      setWidgets([]);
+      return;
+    }
+
+    const dbWidgets = await getWidgets(projectId);
+console.log('📦 Raw widgets from DB:', dbWidgets);
+
+const mappedWidgets = dbWidgets.map(w => {
+  console.log(`📊 Mapping ${w.widget_type}:`, w.data);
+  
+  return {
+    id: w.id, 
+    type: w.widget_type, 
+    x: w.x, 
+    y: w.y, 
+    width: w.width, 
+    height: w.height,
+    gridPosition: 0, 
+    zIndex: w.z_index, 
+    data: w.data, 
+    dbId: w.id,
+  };
+});
+
+console.log('✅ Mapped widgets:', mappedWidgets);
+setWidgets(mappedWidgets);
+  };
+
+ const handleProjectsChange = async (updatedProjectsList: Project[]) => {
+  const newProjects = updatedProjectsList.filter(p => p.id.startsWith('temp-') && userId);
+  
+  for (const newProj of newProjects) {
+    console.log('🆕 Creating project:', newProj.name);
+    const created = await createProject(userId!, newProj.name);
+    
+    if (created) {
+      console.log('✅ Project created with UUID:', created.id);
       
-      const PADDING = 20;
-      return !(
-        x + width + PADDING < widget.x ||
-        x > widget.x + widget.width + PADDING ||
-        y + height + PADDING < widget.y ||
-        y > widget.y + widget.height + PADDING
+      // Update the project in the list FIRST
+      updatedProjectsList = updatedProjectsList.map(p => 
+        p.id === newProj.id ? created : p
       );
+      
+      // THEN update state and refs
+      if (newProj.id === selectedProjectId) {
+        console.log('🔄 Updating selectedProjectId to:', created.id);
+        setSelectedProjectId(created.id);
+        selectedProjectIdRef.current = created.id;
+        setSelectedProjectName(created.name);
+        
+        // Force widgets to empty for new project
+        setWidgets([]);
+      }
+    }
+  }
+  
+  setProjects(updatedProjectsList);
+};
+
+  const handleProjectRename = async (projectId: string, newName: string) => {
+    if (!userId || projectId.startsWith('guest-') || projectId.startsWith('temp-')) return;
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (uuidRegex.test(projectId)) await updateProject(projectId, newName);
+  };
+
+  const handleProjectDelete = async (projectId: string) => {
+    if (!userId || projectId.startsWith('guest-') || projectId.startsWith('temp-')) return;
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (uuidRegex.test(projectId)) await dbDeleteProject(projectId);
+  };
+
+  const checkCollision = (x: number, y: number, width: number, height: number, currentWidgets: WidgetPosition[], excludeId?: string) => {
+    return currentWidgets.some(widget => {
+      if (excludeId && widget.id === excludeId) return false;
+      const PADDING = 10;
+      return !(x + width + PADDING < widget.x || x > widget.x + widget.width + PADDING || y + height + PADDING < widget.y || y > widget.y + widget.height + PADDING);
     });
   };
 
-  const findNextPosition = (width = DEFAULT_WIDTH, height = DEFAULT_HEIGHT) => {
+  const findNextPosition = (width: number, height: number, currentWidgets: WidgetPosition[]) => {
     for (let row = 0; row < 50; row++) {
       for (let col = 0; col < COLS; col++) {
         const x = START_X + (col * (DEFAULT_WIDTH + GAP_X));
         const y = START_Y + (row * (DEFAULT_HEIGHT + GAP_Y));
-
-        if (!checkCollision(x, y, width, height)) {
-          return { x, y };
-        }
+        if (!checkCollision(x, y, width, height, currentWidgets)) return { x, y };
       }
     }
-
-    return { 
-      x: START_X, 
-      y: START_Y + (widgets.length * 100) 
-    };
+    return { x: START_X, y: START_Y + (currentWidgets.length * 100) };
   };
 
-  const addWidget = (type: string) => {
-    const position = findNextPosition();
-    
-    let width = DEFAULT_WIDTH;
-    let height = DEFAULT_HEIGHT;
-    
-    if (type === 'text') {
-      width = 400;
-      height = 80;
-    } else if (type === 'kpi') {
-      width = 300;
-      height = 180;
-    } else if (type === 'table') {
-      width = 600;
-      height = 400;
+  const findNearbyPosition = (sourceWidget: WidgetPosition, newWidth: number, newHeight: number, currentWidgets: WidgetPosition[]) => {
+    const GAP = 30;
+    const tryPositions = [
+      { x: sourceWidget.x + sourceWidget.width + GAP, y: sourceWidget.y },
+      { x: sourceWidget.x, y: sourceWidget.y + sourceWidget.height + GAP },
+    ];
+    for (const pos of tryPositions) {
+      if (!checkCollision(pos.x, pos.y, newWidth, newHeight, currentWidgets)) return pos;
     }
-    
-    const newWidget: WidgetPosition = {
-      id: Date.now().toString(),
-      type,
-      x: position.x,
-      y: position.y,
-      width: width,
-      height: height,
-      gridPosition: widgets.length,
-      data: type === 'text' ? { content: '' } : undefined,
-    };
-    setWidgets([...widgets, newWidget]);
+    return findNextPosition(newWidth, newHeight, currentWidgets);
   };
 
-  const deleteWidget = (id: string) => {
-    setWidgets(widgets.filter((w) => w.id !== id));
-  };
-
-  const duplicateWidget = (id: string) => {
-    const widget = widgets.find(w => w.id === id);
-    if (!widget) return;
-
-    const position = findNextPosition(widget.width, widget.height);
-    
-    const newWidget: WidgetPosition = {
-      ...widget,
-      id: Date.now().toString(),
-      x: position.x,
-      y: position.y,
-      gridPosition: widgets.length,
-      data: widget.data ? JSON.parse(JSON.stringify(widget.data)) : undefined,
-    };
-    setWidgets([...widgets, newWidget]);
-  };
-
-  const updateWidgetPosition = (id: string, x: number, y: number) => {
-    setWidgets(widgets.map(w => w.id === id ? { ...w, x, y } : w));
-  };
-
-  const updateWidgetSize = (id: string, width: number, height: number) => {
-    setWidgets(widgets.map(w => w.id === id ? { ...w, width, height } : w));
-  };
-
-  const updateWidgetData = (id: string, data: any) => {
-    setWidgets(widgets.map(w => w.id === id ? { ...w, data } : w));
-  };
-
-  const handleProjectSelect = (projectId: string, projectName: string) => {
-    setProjects(prevProjects => 
-      prevProjects.map(p => 
-        p.id === selectedProjectId 
-          ? { ...p, widgets: widgets }
-          : p
-      )
-    );
-
-    const newProject = projects.find(p => p.id === projectId);
-    setSelectedProjectId(projectId);
-    setSelectedProjectName(projectName);
-    setWidgets(newProject?.widgets || []);
-  };
-
-  const handleProjectsChange = (updatedProjectsList: any[]) => {
-    setProjects(prevProjects => {
-      return updatedProjectsList.map(updatedProj => {
-        const existingProj = prevProjects.find(p => p.id === updatedProj.id);
-        return {
-          ...updatedProj,
-          widgets: existingProj?.widgets || []
-        };
-      });
+  const bringWidgetToFront = useCallback((id: string) => {
+    setWidgets(prev => {
+      const maxZ = Math.max(...prev.map(w => w.zIndex || 0), 0);
+      return prev.map(w => w.id === id ? { ...w, zIndex: maxZ + 1 } : w);
     });
-  };
+  }, []);
 
-  const handleGenerateWidgets = (aiWidgets: any[]) => {
+  const addWidget = useCallback((type: string) => {
+    setWidgets(prev => {
+      let width = DEFAULT_WIDTH, height = DEFAULT_HEIGHT;
+      if (type === 'text') { width = 400; height = 80; }
+      else if (type === 'kpi') { width = 300; height = 180; }
+      else if (type === 'table') { width = 600; height = 400; }
+      const position = findNextPosition(width, height, prev);
+      return [...prev, { id: `temp-${Date.now()}`, type, x: position.x, y: position.y, width, height, gridPosition: prev.length, zIndex: prev.length + 1, data: type === 'text' ? { content: '' } : undefined }];
+    });
+  }, []);
+
+  const deleteWidget = useCallback((id: string) => {
+    setWidgets(prev => prev.filter(w => w.id !== id));
+  }, []);
+
+  const duplicateWidget = useCallback((id: string) => {
+    setWidgets(prev => {
+      const widget = prev.find(w => w.id === id);
+      if (!widget) return prev;
+      const position = findNearbyPosition(widget, widget.width, widget.height, prev);
+      return [...prev, { ...widget, id: `temp-${Date.now()}`, x: position.x, y: position.y, dbId: undefined }];
+    });
+  }, []);
+
+  const updateWidgetPosition = useCallback((id: string, x: number, y: number) => {
+    setWidgets(prev => prev.map(w => w.id === id ? { ...w, x, y } : w));
+  }, []);
+
+  const updateWidgetSize = useCallback((id: string, width: number, height: number) => {
+    setWidgets(prev => prev.map(w => w.id === id ? { ...w, width, height } : w));
+  }, []);
+
+  const updateWidgetData = useCallback((id: string, data: any) => {
+    if (data.action === 'create_chart') {
+      setWidgets(prev => {
+        const sourceTable = prev.find(w => w.id === id);
+        const position = sourceTable ? findNearbyPosition(sourceTable, DEFAULT_WIDTH, DEFAULT_HEIGHT, prev) : findNextPosition(DEFAULT_WIDTH, DEFAULT_HEIGHT, prev);
+        return [...prev, { id: `temp-${Date.now()}`, type: data.chartType, x: position.x, y: position.y, width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT, gridPosition: prev.length, zIndex: Math.max(...prev.map(w => w.zIndex || 0), 0) + 1, data: { title: data.chartTitle, data: data.chartData, colors: data.chartType === 'bar' ? ["#3b82f6", "#8b5cf6", "#ec4899", "#f97316", "#22c55e"] : ["#ec4899", "#f97316", "#eab308", "#22c55e", "#3b82f6"] }}];
+      });
+      return;
+    }
+    setWidgets(prev => prev.map(w => w.id === id ? { ...w, data } : w));
+  }, []);
+
+  const handleGenerateWidgets = useCallback((aiWidgets: any[]) => {
+  setWidgets(prev => {
     const newWidgets: WidgetPosition[] = [];
     
     aiWidgets.forEach((widget, index) => {
-      let width = DEFAULT_WIDTH;
-      let height = DEFAULT_HEIGHT;
+      console.log('🎨 Creating widget:', widget.type, 'Data:', widget.data);
       
-      if (widget.type === 'text') {
-        width = 400;
-        height = 80;
-      } else if (widget.type === 'kpi') {
-        width = 300;
-        height = 180;
-      } else if (widget.type === 'table') {
-        width = 600;
-        height = 400;
+      // VALIDATION: Check if chart has data
+      if (['bar', 'line', 'pie', 'trend'].includes(widget.type)) {
+        if (!widget.data?.data || widget.data.data.length === 0) {
+          console.error('❌ Empty chart data for', widget.type);
+          console.error('Received data:', widget.data);
+          return; // Skip this widget
+        }
+        
+        // VALIDATION: Check data format
+        const firstItem = widget.data.data[0];
+        if (!firstItem.name || firstItem.value === undefined) {
+          console.error('❌ Invalid chart data format:', firstItem);
+          console.error('Expected: {name: "...", value: NUMBER}');
+          return; // Skip this widget
+        }
       }
       
-      const position = findNextPosition(width, height);
+      let width = DEFAULT_WIDTH, height = DEFAULT_HEIGHT;
+      if (widget.type === 'text') { width = 400; height = 80; }
+      else if (widget.type === 'kpi') { width = 300; height = 180; }
+      else if (widget.type === 'table') { width = 600; height = 400; }
       
-      const newWidget: WidgetPosition = {
-        id: Date.now().toString() + index,
+      const position = findNextPosition(width, height, [...prev, ...newWidgets]);
+      
+      newWidgets.push({
+        id: `temp-${Date.now()}-${index}`,
         type: widget.type,
         x: position.x,
         y: position.y,
-        width: width,
-        height: height,
-        gridPosition: widgets.length + newWidgets.length,
-        data: widget.data,
-      };
-      
-      newWidgets.push(newWidget);
+        width,
+        height,
+        gridPosition: prev.length + index,
+        zIndex: prev.length + index + 1,
+        data: widget.data
+      });
     });
     
-    setWidgets([...widgets, ...newWidgets]);
-  };
+    return [...prev, ...newWidgets];
+  });
+}, []);
 
-  const handleWidgetAction = (action: any) => {
-    console.log('Widget action:', action);
+const handleWidgetAction = useCallback((action: any) => {
+  console.log('📩 Widget action received:', action);
+  
+  switch (action.type) {
+    case 'modify': 
+      if (action.widgetId) {
+        setWidgets(prev => prev.map(w => 
+          w.id === action.widgetId 
+            ? { ...w, data: { ...w.data, ...action.data } } 
+            : w
+        ));
+      }
+      break;
+      
+    case 'delete': 
+      if (action.widgetId) {
+        setWidgets(prev => prev.filter(w => w.id !== action.widgetId));
+      }
+      break;
+      
+    case 'add': 
+      if (action.widgets) {
+        handleGenerateWidgets(action.widgets);
+      }
+      break;
+      
+    case 'update_value': 
+      if (action.widgetId && action.field) {
+        setWidgets(prev => prev.map(w => 
+          w.id === action.widgetId 
+            ? { ...w, data: { ...w.data, [action.field]: action.value } } 
+            : w
+        ));
+      }
+      break;
+      
+    case 'read':
+      // AI is reading data - just acknowledge, no action needed
+      console.log('✅ AI read widget data successfully');
+      break;
+      
+    default:
+      // Unknown action - just log it, don't break
+      console.log('ℹ️ Unknown action type:', action.type);
+  }
+}, [handleGenerateWidgets]);
 
-    switch (action.type) {
-      case 'modify':
-        if (action.widgetId) {
-          setWidgets(widgets.map(w => 
-            w.id === action.widgetId 
-              ? { ...w, data: { ...w.data, ...action.data } }
-              : w
-          ));
-        }
-        break;
 
-      case 'delete':
-        if (action.widgetId) {
-          deleteWidget(action.widgetId);
-        } else if (action.widgetType) {
-          const widgetToDelete = widgets.find(w => w.type === action.widgetType);
-          if (widgetToDelete) deleteWidget(widgetToDelete.id);
-        }
-        break;
-
-      case 'add':
-        if (action.widgets) {
-          handleGenerateWidgets(action.widgets);
-        }
-        break;
-
-      case 'update_value':
-        if (action.widgetId && action.field) {
-          setWidgets(widgets.map(w => 
-            w.id === action.widgetId 
-              ? { ...w, data: { ...w.data, [action.field]: action.value } }
-              : w
-          ));
-        }
-        break;
-
-      default:
-        console.warn('Unknown action type:', action.type);
-    }
-  };
+  if (isLoadingData) {
+    return <div className="h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-blue-950 to-slate-950"><div className="text-white text-xl">Loading...</div></div>;
+  }
 
   return (
     <div className="h-screen flex relative overflow-hidden bg-gradient-to-br from-slate-950 via-blue-950 to-slate-950">
       <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-blue-600/20 rounded-full blur-[120px] animate-pulse" />
       <div className="absolute bottom-0 right-1/4 w-[500px] h-[500px] bg-indigo-600/15 rounded-full blur-[120px] animate-pulse" />
-
+      {!userId && widgets.length > 0 && <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-yellow-500/20 backdrop-blur-xl border border-yellow-500/30 rounded-lg px-4 py-2 text-yellow-200 text-sm">⚠️ Guest mode</div>}
       <div className="relative z-10 flex w-full p-4 gap-4">
-        <Sidebar 
-          selectedProjectId={selectedProjectId}
-          onProjectSelect={handleProjectSelect}
-          onProjectsChange={handleProjectsChange}
-          currentWidgets={widgets}
-          onWidgetAction={handleWidgetAction}
-        />
+        <Sidebar projects={projects} selectedProjectId={selectedProjectId} onProjectSelect={handleProjectSelect} onProjectsChange={handleProjectsChange} onProjectRename={handleProjectRename} onProjectDelete={handleProjectDelete} currentWidgets={widgets} onWidgetAction={handleWidgetAction} />
         <div className="flex-1 flex flex-col gap-4">
-          <TopBar 
-            onAddWidget={addWidget}
-            projectName={selectedProjectName}
-            onOpenAI={() => setShowAIAssistant(true)}
-          />
-          <DashboardCanvas 
-            widgets={widgets} 
-            onDeleteWidget={deleteWidget}
-            onDuplicateWidget={duplicateWidget}
-            onAddWidget={addWidget}
-            onUpdatePosition={updateWidgetPosition}
-            onUpdateSize={updateWidgetSize}
-            onUpdateData={updateWidgetData}
-          />
+          <TopBar onAddWidget={addWidget} projectName={selectedProjectName} onOpenAI={() => setShowAIAssistant(true)} />
+          <DashboardCanvas widgets={widgets} onDeleteWidget={deleteWidget} onDuplicateWidget={duplicateWidget} onAddWidget={addWidget} onUpdatePosition={updateWidgetPosition} onUpdateSize={updateWidgetSize} onUpdateData={updateWidgetData} onBringToFront={bringWidgetToFront} />
         </div>
       </div>
-
-      <AIAssistant 
-        isOpen={showAIAssistant}
-        onClose={() => setShowAIAssistant(false)}
-        onGenerateWidgets={handleGenerateWidgets}
-      />
+      <AIAssistant isOpen={showAIAssistant} onClose={() => setShowAIAssistant(false)} onGenerateWidgets={handleGenerateWidgets} />
     </div>
   );
 }

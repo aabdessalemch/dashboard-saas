@@ -17,6 +17,7 @@ interface DashboardCanvasProps {
   onUpdatePosition: (id: string, x: number, y: number) => void;
   onUpdateSize: (id: string, width: number, height: number) => void;
   onUpdateData: (id: string, data: any) => void;
+  onBringToFront?: (id: string) => void;
 }
 
 export default function DashboardCanvas({ 
@@ -26,7 +27,8 @@ export default function DashboardCanvas({
   onAddWidget,
   onUpdatePosition,
   onUpdateSize,
-  onUpdateData
+  onUpdateData,
+  onBringToFront
 }: DashboardCanvasProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const [canvasWidth, setCanvasWidth] = useState(0);
@@ -50,10 +52,12 @@ export default function DashboardCanvas({
       onPositionChange: (x: number, y: number) => onUpdatePosition(widget.id, x, y),
       onSizeChange: (width: number, height: number) => onUpdateSize(widget.id, width, height),
       onDataChange: (data: any) => onUpdateData(widget.id, data),
+      onBringToFront: onBringToFront ? () => onBringToFront(widget.id) : undefined,
       initialX: widget.x,
       initialY: widget.y,
       initialWidth: widget.width,
       initialHeight: widget.height,
+      initialZIndex: widget.zIndex || 1,
       initialData: widget.data,
       maxWidth: canvasWidth - 40,
     };

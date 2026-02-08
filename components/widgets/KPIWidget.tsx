@@ -1,6 +1,6 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
-import { X, TrendingUp, TrendingDown, Minus, Edit2 } from "lucide-react";
+import { X, TrendingUp, TrendingDown, Minus, Settings } from "lucide-react";
 
 interface KPIWidgetProps {
   onDelete: () => void;
@@ -8,10 +8,12 @@ interface KPIWidgetProps {
   onPositionChange?: (x: number, y: number) => void;
   onSizeChange?: (width: number, height: number) => void;
   onDataChange?: (data: any) => void;
+  onBringToFront?: () => void;
   initialX?: number;
   initialY?: number;
   initialWidth?: number;
   initialHeight?: number;
+  initialZIndex?: number;
   maxWidth?: number;
   initialData?: any;
 }
@@ -22,99 +24,122 @@ export default function KPIWidget({
   onPositionChange, 
   onSizeChange,
   onDataChange,
+  onBringToFront,
   initialX = 0, 
   initialY = 0,
   initialWidth = 300,
   initialHeight = 180,
+  initialZIndex = 1,
   maxWidth = 1200,
   initialData
 }: KPIWidgetProps) {
-  const [title, setTitle] = useState(initialData?.title || "Total Revenue");
-  const [value, setValue] = useState(initialData?.value || "124.5");
-  const [unit, setUnit] = useState(initialData?.unit || "K");
-  const [trend, setTrend] = useState<'up' | 'down' | 'neutral'>(initialData?.trend || 'up');
-  const [trendValue, setTrendValue] = useState(initialData?.trendValue || "12.5");
-  const [bgColor, setBgColor] = useState(initialData?.bgColor || "rgba(59, 130, 246, 0.2)");
-  const [textColor, setTextColor] = useState(initialData?.textColor || "#ffffff");
-  const [accentColor, setAccentColor] = useState(initialData?.accentColor || "#3b82f6");
-  
+  const [title, setTitle] = useState(initialData?.title || "KPI Metric");
+  const [value, setValue] = useState(initialData?.value || "1,234");
+  const [change, setChange] = useState(initialData?.change || "+12.5%");
+  const [bgColor, setBgColor] = useState(initialData?.bgColor || "from-blue-500/20 to-purple-600/20");
+  const [arrowColor, setArrowColor] = useState(initialData?.arrowColor || "auto");
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isEditingValue, setIsEditingValue] = useState(false);
-  const [showColorPicker, setShowColorPicker] = useState(false);
-  
-  const [width, setWidth] = useState(initialWidth);
-  const [height, setHeight] = useState(initialHeight);
+  const [isEditingChange, setIsEditingChange] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [position, setPosition] = useState({ x: initialX, y: initialY });
+  const [zIndex, setZIndex] = useState(initialZIndex);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null);
+  const [cardWidth, setCardWidth] = useState(initialWidth);
+  const [cardHeight, setCardHeight] = useState(initialHeight);
 
-  const containerRef = useRef<HTMLDivElement>(null);
-  const colorPickerRef = useRef<HTMLDivElement>(null);
+  // Add this after all useState declarations
+const settingsPanelRef = useRef<HTMLDivElement>(null);
 
-  // Load initial data from AI
+useEffect(() => {
+  const handleClickOutside = (event: MouseEvent) => {
+    if (showSettings && settingsPanelRef.current && !settingsPanelRef.current.contains(event.target as Node)) {
+      // Check if click is not on the settings button itself
+      const target = event.target as HTMLElement;
+      if (!target.closest('button[title="Settings"]')) {
+        setShowSettings(false);
+      }
+    }
+  };
+
+  if (showSettings) {
+    document.addEventListener('mousedown', handleClickOutside);
+  }
+
+  return () => {
+    document.removeEventListener('mousedown', handleClickOutside);
+  };
+}, [showSettings]);
+
+
+  const bgColorOptions = [
+    { name: "Blue Purple", value: "from-blue-500/20 to-purple-600/20", preview: "bg-gradient-to-br from-blue-500 to-purple-600" },
+    { name: "Green Teal", value: "from-green-500/20 to-teal-600/20", preview: "bg-gradient-to-br from-green-500 to-teal-600" },
+    { name: "Pink Rose", value: "from-pink-500/20 to-rose-600/20", preview: "bg-gradient-to-br from-pink-500 to-rose-600" },
+    { name: "Orange Red", value: "from-orange-500/20 to-red-600/20", preview: "bg-gradient-to-br from-orange-500 to-red-600" },
+    { name: "Indigo Blue", value: "from-indigo-500/20 to-blue-600/20", preview: "bg-gradient-to-br from-indigo-500 to-blue-600" },
+    { name: "Yellow Orange", value: "from-yellow-500/20 to-orange-600/20", preview: "bg-gradient-to-br from-yellow-500 to-orange-600" },
+    { name: "Purple Fuchsia", value: "from-purple-500/20 to-fuchsia-600/20", preview: "bg-gradient-to-br from-purple-500 to-fuchsia-600" },
+    { name: "Cyan Blue", value: "from-cyan-500/20 to-blue-600/20", preview: "bg-gradient-to-br from-cyan-500 to-blue-600" },
+  ];
+
+  const arrowColorOptions = [
+    { name: "Auto", value: "auto", color: "bg-gradient-to-r from-green-400 to-red-400" },
+    { name: "Green", value: "text-green-400", color: "bg-green-400" },
+    { name: "Red", value: "text-red-400", color: "bg-red-400" },
+    { name: "Blue", value: "text-blue-400", color: "bg-blue-400" },
+    { name: "Yellow", value: "text-yellow-400", color: "bg-yellow-400" },
+    { name: "Purple", value: "text-purple-400", color: "bg-purple-400" },
+    { name: "Orange", value: "text-orange-400", color: "bg-orange-400" },
+    { name: "Gray", value: "text-gray-400", color: "bg-gray-400" },
+  ];
+
   useEffect(() => {
     if (initialData) {
       if (initialData.title) setTitle(initialData.title);
       if (initialData.value) setValue(initialData.value);
-      if (initialData.unit) setUnit(initialData.unit);
-      if (initialData.trend) setTrend(initialData.trend);
-      if (initialData.trendValue) setTrendValue(initialData.trendValue);
+      if (initialData.change) setChange(initialData.change);
       if (initialData.bgColor) setBgColor(initialData.bgColor);
-      if (initialData.textColor) setTextColor(initialData.textColor);
-      if (initialData.accentColor) setAccentColor(initialData.accentColor);
+      if (initialData.arrowColor) setArrowColor(initialData.arrowColor);
     }
-  }, [initialData]);
+  }, []);
 
-  // Save data function
+  useEffect(() => {
+    setZIndex(initialZIndex);
+  }, [initialZIndex]);
+
   const saveData = () => {
     if (onDataChange) {
-      onDataChange({
-        title,
-        value,
-        unit,
-        trend,
-        trendValue,
-        bgColor,
-        textColor,
-        accentColor
-      });
+      onDataChange({ title, value, change, bgColor, arrowColor });
     }
   };
 
-  // Save when data changes
-  useEffect(() => {
-    saveData();
-  }, [title, value, unit, trend, trendValue, bgColor, textColor, accentColor]);
+  const getTrendIcon = () => {
+    if (change.includes('+')) return <TrendingUp size={20} />;
+    if (change.includes('-')) return <TrendingDown size={20} />;
+    return <Minus size={20} />;
+  };
 
-  // Close color picker when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (colorPickerRef.current && !colorPickerRef.current.contains(event.target as Node)) {
-        const target = event.target as HTMLElement;
-        if (!target.closest('[data-color-picker-button]')) {
-          setShowColorPicker(false);
-        }
-      }
-    };
-
-    if (showColorPicker) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => {
-        document.removeEventListener('mousedown', handleClickOutside);
-      };
-    }
-  }, [showColorPicker]);
+  const getTrendColor = () => {
+    if (arrowColor !== "auto") return arrowColor;
+    if (change.includes('+')) return 'text-green-400';
+    if (change.includes('-')) return 'text-red-400';
+    return 'text-gray-400';
+  };
 
   const startDrag = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement)?.closest('button') || 
-        (e.target as HTMLElement)?.closest('input')) {
+        (e.target as HTMLElement)?.closest('input') ||
+        (e.target as HTMLElement)?.closest('.settings-panel')) {
       return;
     }
     
-    if (isEditingTitle || isEditingValue) return;
     e.preventDefault();
     e.stopPropagation();
+    
+    if (onBringToFront) onBringToFront();
     
     setIsDragging(true);
     const startX = e.clientX - position.x;
@@ -124,9 +149,7 @@ export default function KPIWidget({
       const newX = Math.max(0, moveEvent.clientX - startX);
       const newY = Math.max(0, moveEvent.clientY - startY);
       setPosition({ x: newX, y: newY });
-      if (onPositionChange) {
-        onPositionChange(newX, newY);
-      }
+      if (onPositionChange) onPositionChange(newX, newY);
     };
 
     const handleMouseUp = () => {
@@ -143,36 +166,40 @@ export default function KPIWidget({
     e.preventDefault();
     e.stopPropagation();
 
+    if (onBringToFront) onBringToFront();
+
     setIsResizing(true);
     const startX = e.clientX;
     const startY = e.clientY;
-    const startHeight = height;
-    const startWidth = width;
+    const startHeight = cardHeight;
+    const startWidth = cardWidth;
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
       requestAnimationFrame(() => {
         const deltaX = moveEvent.clientX - startX;
         const deltaY = moveEvent.clientY - startY;
-        let newWidth = width;
-        let newHeight = height;
+        let newWidth = cardWidth;
+        let newHeight = cardHeight;
 
         if (direction.includes('s')) {
-          newHeight = Math.max(150, Math.min(600, startHeight + deltaY));
-          setHeight(newHeight);
+          newHeight = Math.max(160, Math.min(600, startHeight + deltaY));
+          setCardHeight(newHeight);
         } else if (direction.includes('n')) {
-          newHeight = Math.max(150, Math.min(600, startHeight - deltaY));
-          setHeight(newHeight);
+          newHeight = Math.max(160, Math.min(600, startHeight - deltaY));
+          setCardHeight(newHeight);
         }
 
         if (direction.includes('e')) {
-          newWidth = Math.max(250, Math.min(maxWidth, startWidth + deltaX));
-          setWidth(newWidth);
+          newWidth = Math.max(280, Math.min(maxWidth, startWidth + deltaX));
+          setCardWidth(newWidth);
         } else if (direction.includes('w')) {
-          newWidth = Math.max(250, Math.min(maxWidth, startWidth - deltaX));
-          setWidth(newWidth);
+          newWidth = Math.max(280, Math.min(maxWidth, startWidth - deltaX));
+          setCardWidth(newWidth);
         }
 
-        onSizeChange?.(newWidth, newHeight);
+        if (onSizeChange) {
+          onSizeChange(newWidth, newHeight);
+        }
       });
     };
 
@@ -181,257 +208,253 @@ export default function KPIWidget({
       setHoveredEdge(null);
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'default';
+      document.body.style.userSelect = 'auto';
     };
 
+    document.body.style.userSelect = 'none';
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
-  };
-
-  const bgColors = [
-    { name: 'Blue', color: 'rgba(59, 130, 246, 0.2)' },
-    { name: 'Purple', color: 'rgba(139, 92, 246, 0.2)' },
-    { name: 'Green', color: 'rgba(16, 185, 129, 0.2)' },
-    { name: 'Red', color: 'rgba(239, 68, 68, 0.2)' },
-    { name: 'Orange', color: 'rgba(245, 158, 11, 0.2)' },
-    { name: 'Pink', color: 'rgba(236, 72, 153, 0.2)' },
-    { name: 'Teal', color: 'rgba(20, 184, 166, 0.2)' },
-    { name: 'Gray', color: 'rgba(100, 116, 139, 0.2)' },
-  ];
-
-  const accentColors = [
-    '#3b82f6', '#8b5cf6', '#10b981', '#ef4444', 
-    '#f59e0b', '#ec4899', '#14b8a6', '#64748b'
-  ];
-
-  const getTrendIcon = () => {
-    if (trend === 'up') return <TrendingUp size={20} className="text-green-400" />;
-    if (trend === 'down') return <TrendingDown size={20} className="text-red-400" />;
-    return <Minus size={20} className="text-gray-400" />;
-  };
-
-  const getTrendColor = () => {
-    if (trend === 'up') return 'text-green-400';
-    if (trend === 'down') return 'text-red-400';
-    return 'text-gray-400';
   };
 
   return (
     <>
       <div 
-        ref={containerRef}
-        className={`group rounded-2xl border-2 backdrop-blur-xl ${
-          isDragging ? 'border-blue-400' : 'border-white/20 hover:border-white/30'
-        } ${isResizing || isDragging ? 'select-none' : ''}`}
+        className={`bg-gradient-to-br ${bgColor} backdrop-blur-xl rounded-2xl border border-white/20 p-6 group hover:border-white/30 transition-all duration-200 ${isDragging || isResizing ? 'select-none' : ''}`}
         style={{ 
-          width: `${width}px`,
-          height: `${height}px`,
+          width: `${cardWidth}px`,
+          height: `${cardHeight}px`,
+          minWidth: '280px',
+          minHeight: '160px',
           position: 'absolute',
           left: `${position.x}px`,
           top: `${position.y}px`,
-          zIndex: isDragging ? 1000 : 1,
-          backgroundColor: bgColor,
-          transition: isDragging || isResizing ? 'none' : 'all 0.2s',
+          zIndex: isDragging ? 9999 : zIndex,
+          transition: isResizing || isDragging ? 'none' : 'all 0.2s',
+        }}
+        onMouseDownCapture={() => {
+          if (onBringToFront) onBringToFront();
         }}
       >
-        {/* Drag Handle */}
         <div 
           onMouseDown={startDrag}
-          className="absolute top-0 left-0 right-0 h-8 cursor-grab active:cursor-grabbing bg-gradient-to-r from-transparent via-white/5 to-transparent hover:via-white/10 transition-all rounded-t-2xl"
+          className="absolute top-0 left-0 right-0 h-3 cursor-grab active:cursor-grabbing bg-gradient-to-r from-transparent via-white/10 to-transparent hover:via-white/20 transition-all"
+          style={{ borderRadius: '16px 16px 0 0' }}
         />
 
-        {/* Action Buttons */}
-        <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-all duration-200 z-10">
+        <div className="absolute top-4 right-4 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all duration-300 z-10">
           <button
-            data-color-picker-button
-            onClick={() => setShowColorPicker(!showColorPicker)}
-            className="w-7 h-7 rounded-lg bg-white/10 hover:bg-blue-500 text-white transition-all flex items-center justify-center"
-            title="Edit Colors"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setShowSettings(!showSettings);
+            }}
+            className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
+            title="Settings"
           >
-            <Edit2 size={14} />
+            <Settings size={16} />
           </button>
           {onDuplicate && (
-            <button 
-              onClick={onDuplicate}
-              className="w-7 h-7 rounded-lg bg-blue-500/20 hover:bg-blue-500 text-white transition-all flex items-center justify-center"
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onDuplicate();
+              }}
+              className="w-8 h-8 rounded-lg bg-blue-500/20 hover:bg-blue-500 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
               title="Duplicate"
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
               </svg>
             </button>
           )}
           <button
-            onClick={onDelete}
-            className="w-7 h-7 rounded-lg bg-red-500/20 hover:bg-red-500 text-white transition-all flex items-center justify-center"
-            title="Delete"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onDelete();
+            }}
+            className="w-8 h-8 rounded-lg bg-red-500/20 hover:bg-red-500 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
           >
-            <X size={14} />
+            <X size={16} />
           </button>
         </div>
 
-        {/* Color Picker Modal */}
-        {showColorPicker && (
-          <div 
-            ref={colorPickerRef}
-            className="absolute top-12 right-2 bg-slate-900 border border-white/20 rounded-xl p-4 shadow-2xl z-20 space-y-3"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div>
-              <p className="text-white text-xs mb-2 font-semibold">Background</p>
-              <div className="grid grid-cols-4 gap-2">
-                {bgColors.map(bg => (
-                  <button
-                    key={bg.name}
-                    onClick={() => setBgColor(bg.color)}
-                    className={`w-8 h-8 rounded border-2 transition-all hover:scale-110 ${
-                      bgColor === bg.color ? 'border-white ring-2 ring-blue-400' : 'border-slate-600'
-                    }`}
-                    style={{ backgroundColor: bg.color }}
-                    title={bg.name}
-                  />
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <p className="text-white text-xs mb-2 font-semibold">Accent Color</p>
-              <div className="grid grid-cols-4 gap-2">
-                {accentColors.map(color => (
-                  <button
-                    key={color}
-                    onClick={() => setAccentColor(color)}
-                    className={`w-8 h-8 rounded border-2 transition-all hover:scale-110 ${
-                      accentColor === color ? 'border-white ring-2 ring-blue-400' : 'border-slate-600'
-                    }`}
-                    style={{ backgroundColor: color }}
-                  />
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <p className="text-white text-xs mb-2 font-semibold">Trend</p>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setTrend('up')}
-                  className={`px-3 py-1.5 rounded-lg text-xs transition-all ${
-                    trend === 'up' ? 'bg-green-500 text-white' : 'bg-white/10 text-white hover:bg-white/20'
-                  }`}
-                >
-                  <TrendingUp size={16} />
-                </button>
-                <button
-                  onClick={() => setTrend('down')}
-                  className={`px-3 py-1.5 rounded-lg text-xs transition-all ${
-                    trend === 'down' ? 'bg-red-500 text-white' : 'bg-white/10 text-white hover:bg-white/20'
-                  }`}
-                >
-                  <TrendingDown size={16} />
-                </button>
-                <button
-                  onClick={() => setTrend('neutral')}
-                  className={`px-3 py-1.5 rounded-lg text-xs transition-all ${
-                    trend === 'neutral' ? 'bg-gray-500 text-white' : 'bg-white/10 text-white hover:bg-white/20'
-                  }`}
-                >
-                  <Minus size={16} />
-                </button>
-              </div>
-            </div>
+        <div className="h-full flex flex-col justify-between">
+          <div>
+            {isEditingTitle ? (
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                onBlur={() => {
+                  setIsEditingTitle(false);
+                  saveData();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === 'Escape') {
+                    setIsEditingTitle(false);
+                    saveData();
+                  }
+                }}
+                autoFocus
+                className="bg-white/10 border border-white/40 rounded-lg px-2 py-1 text-white/70 text-sm focus:outline-none focus:border-blue-500 w-full"
+              />
+            ) : (
+              <p 
+                onDoubleClick={() => setIsEditingTitle(true)}
+                className="text-white/70 text-sm font-medium cursor-text hover:text-blue-400 transition-colors"
+              >
+                {title}
+              </p>
+            )}
           </div>
-        )}
 
-        {/* Content */}
-        <div className="h-full flex flex-col justify-center items-center p-6 pt-10">
-          {/* Title */}
-          {isEditingTitle ? (
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              onBlur={() => setIsEditingTitle(false)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === 'Escape') setIsEditingTitle(false);
-              }}
-              autoFocus
-              className="bg-white/10 border border-white/40 rounded-lg px-3 py-1 text-white text-sm font-medium focus:outline-none focus:border-blue-500 text-center mb-4"
-              onClick={(e) => e.stopPropagation()}
-            />
-          ) : (
-            <h3 
-              onDoubleClick={() => setIsEditingTitle(true)}
-              className="text-white/70 text-sm font-medium mb-4 cursor-text hover:text-white transition-colors"
-              style={{ color: textColor, opacity: 0.8 }}
-            >
-              {title}
-            </h3>
-          )}
-
-          {/* Value */}
-          <div className="flex items-baseline gap-2 mb-3">
+          <div className="flex-1 flex items-center justify-center">
             {isEditingValue ? (
               <input
                 type="text"
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
-                onBlur={() => setIsEditingValue(false)}
+                onBlur={() => {
+                  setIsEditingValue(false);
+                  saveData();
+                }}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === 'Escape') setIsEditingValue(false);
+                  if (e.key === 'Enter' || e.key === 'Escape') {
+                    setIsEditingValue(false);
+                    saveData();
+                  }
                 }}
                 autoFocus
-                className="bg-white/10 border border-white/40 rounded-lg px-3 py-2 text-white text-4xl font-bold focus:outline-none focus:border-blue-500 text-center w-32"
-                onClick={(e) => e.stopPropagation()}
+                className="bg-white/10 border border-white/40 rounded-lg px-3 py-2 text-white text-4xl font-bold focus:outline-none focus:border-blue-500 text-center w-full"
               />
             ) : (
-              <span 
+              <h2 
                 onDoubleClick={() => setIsEditingValue(true)}
-                className="text-5xl font-bold cursor-text hover:opacity-80 transition-opacity"
-                style={{ color: accentColor }}
+                className="text-white text-5xl font-bold cursor-text hover:text-blue-400 transition-colors"
               >
                 {value}
-              </span>
+              </h2>
             )}
-            <input
-              type="text"
-              value={unit}
-              onChange={(e) => setUnit(e.target.value)}
-              className="bg-transparent border-none text-2xl font-semibold text-white/60 focus:outline-none w-12 text-left"
-              placeholder="K"
-              onClick={(e) => e.stopPropagation()}
-            />
           </div>
 
-          {/* Trend */}
-          <div className="flex items-center gap-2">
-            {getTrendIcon()}
-            <input
-              type="text"
-              value={trendValue}
-              onChange={(e) => setTrendValue(e.target.value)}
-              className={`bg-transparent border-none text-sm font-semibold ${getTrendColor()} focus:outline-none w-16 text-center`}
-              placeholder="0"
-              onClick={(e) => e.stopPropagation()}
-            />
-            <span className={`text-sm ${getTrendColor()}`}>%</span>
+          <div className="flex items-center justify-center">
+            {isEditingChange ? (
+              <input
+                type="text"
+                value={change}
+                onChange={(e) => setChange(e.target.value)}
+                onBlur={() => {
+                  setIsEditingChange(false);
+                  saveData();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === 'Escape') {
+                    setIsEditingChange(false);
+                    saveData();
+                  }
+                }}
+                autoFocus
+                className="bg-white/10 border border-white/40 rounded-lg px-2 py-1 text-white text-sm focus:outline-none focus:border-blue-500 text-center w-full"
+              />
+            ) : (
+              <div 
+                onDoubleClick={() => setIsEditingChange(true)}
+                className="flex items-center gap-2 cursor-text"
+              >
+                <span className={`${getTrendColor()}`}>{getTrendIcon()}</span>
+                <span className={`${getTrendColor()} font-semibold`}>{change}</span>
+              </div>
+            )}
           </div>
         </div>
 
         {/* Resize Handles */}
-        <div onMouseDown={startResize('nw')} onMouseEnter={() => setHoveredEdge('nw')} onMouseLeave={() => setHoveredEdge(null)} className="absolute -top-1 -left-1 w-4 h-4 cursor-nwse-resize" />
-        <div onMouseDown={startResize('ne')} onMouseEnter={() => setHoveredEdge('ne')} onMouseLeave={() => setHoveredEdge(null)} className="absolute -top-1 -right-1 w-4 h-4 cursor-nesw-resize" />
-        <div onMouseDown={startResize('sw')} onMouseEnter={() => setHoveredEdge('sw')} onMouseLeave={() => setHoveredEdge(null)} className="absolute -bottom-1 -left-1 w-4 h-4 cursor-nesw-resize" />
-        <div onMouseDown={startResize('se')} onMouseEnter={() => setHoveredEdge('se')} onMouseLeave={() => setHoveredEdge(null)} className="absolute -bottom-1 -right-1 w-4 h-4 cursor-nwse-resize" />
-        <div onMouseDown={startResize('n')} onMouseEnter={() => setHoveredEdge('n')} onMouseLeave={() => setHoveredEdge(null)} className="absolute -top-1 left-4 right-4 h-2 cursor-ns-resize" />
-        <div onMouseDown={startResize('s')} onMouseEnter={() => setHoveredEdge('s')} onMouseLeave={() => setHoveredEdge(null)} className="absolute -bottom-1 left-4 right-4 h-2 cursor-ns-resize" />
-        <div onMouseDown={startResize('w')} onMouseEnter={() => setHoveredEdge('w')} onMouseLeave={() => setHoveredEdge(null)} className="absolute top-4 bottom-4 -left-1 w-2 cursor-ew-resize" />
-        <div onMouseDown={startResize('e')} onMouseEnter={() => setHoveredEdge('e')} onMouseLeave={() => setHoveredEdge(null)} className="absolute top-4 bottom-4 -right-1 w-2 cursor-ew-resize" />
+        <div onMouseDown={startResize('nw')} onMouseEnter={() => setHoveredEdge('nw')} onMouseLeave={() => setHoveredEdge(null)} className="absolute -top-1 -left-1 w-4 h-4 cursor-nwse-resize z-20" />
+        <div onMouseDown={startResize('ne')} onMouseEnter={() => setHoveredEdge('ne')} onMouseLeave={() => setHoveredEdge(null)} className="absolute -top-1 -right-1 w-4 h-4 cursor-nesw-resize z-20" />
+        <div onMouseDown={startResize('sw')} onMouseEnter={() => setHoveredEdge('sw')} onMouseLeave={() => setHoveredEdge(null)} className="absolute -bottom-1 -left-1 w-4 h-4 cursor-nesw-resize z-20" />
+        <div onMouseDown={startResize('se')} onMouseEnter={() => setHoveredEdge('se')} onMouseLeave={() => setHoveredEdge(null)} className="absolute -bottom-1 -right-1 w-4 h-4 cursor-nwse-resize z-20" />
+        <div onMouseDown={startResize('n')} onMouseEnter={() => setHoveredEdge('n')} onMouseLeave={() => setHoveredEdge(null)} className="absolute -top-1 left-4 right-4 h-2 cursor-ns-resize z-20" />
+        <div onMouseDown={startResize('s')} onMouseEnter={() => setHoveredEdge('s')} onMouseLeave={() => setHoveredEdge(null)} className="absolute -bottom-1 left-4 right-4 h-2 cursor-ns-resize z-20" />
+        <div onMouseDown={startResize('w')} onMouseEnter={() => setHoveredEdge('w')} onMouseLeave={() => setHoveredEdge(null)} className="absolute top-4 bottom-4 -left-1 w-2 cursor-ew-resize z-20" />
+        <div onMouseDown={startResize('e')} onMouseEnter={() => setHoveredEdge('e')} onMouseLeave={() => setHoveredEdge(null)} className="absolute top-4 bottom-4 -right-1 w-2 cursor-ew-resize z-20" />
 
         {hoveredEdge === 'n' && <div className="absolute top-0 left-0 right-0 h-0.5 bg-blue-400/50 rounded-t-2xl pointer-events-none" />}
         {hoveredEdge === 's' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-400/50 rounded-b-2xl pointer-events-none" />}
         {hoveredEdge === 'w' && <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-blue-400/50 rounded-l-2xl pointer-events-none" />}
         {hoveredEdge === 'e' && <div className="absolute right-0 top-0 bottom-0 w-0.5 bg-blue-400/50 rounded-r-2xl pointer-events-none" />}
       </div>
+
+      {/* Settings Panel */}
+{showSettings && (
+  <div 
+    ref={settingsPanelRef}
+    className="settings-panel absolute bg-slate-900/95 backdrop-blur-xl rounded-xl border border-white/20 p-4 shadow-2xl z-[10000]"
+    style={{
+      left: `${position.x + cardWidth + 10}px`,
+      top: `${position.y}px`,
+      width: '240px',
+    }}
+    onClick={(e) => e.stopPropagation()}
+  >
+          <div className="flex items-center justify-between mb-4">
+            <h4 className="text-white font-semibold text-sm">KPI Settings</h4>
+            <button
+              onClick={() => setShowSettings(false)}
+              className="w-6 h-6 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors"
+            >
+              <X size={14} className="text-white" />
+            </button>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-white/70 text-xs font-medium mb-2">Background</label>
+              <div className="grid grid-cols-4 gap-2">
+                {bgColorOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    onClick={() => {
+                      setBgColor(option.value);
+                      saveData();
+                    }}
+                    className={`w-10 h-10 rounded-lg ${option.preview} transition-all ${
+                      bgColor === option.value 
+                        ? 'ring-2 ring-white scale-110' 
+                        : 'hover:scale-105'
+                    }`}
+                    title={option.name}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-white/70 text-xs font-medium mb-2">Arrow Color</label>
+              <div className="grid grid-cols-4 gap-2">
+                {arrowColorOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    onClick={() => {
+                      setArrowColor(option.value);
+                      saveData();
+                    }}
+                    className={`w-10 h-10 rounded-lg ${option.color} transition-all ${
+                      arrowColor === option.value 
+                        ? 'ring-2 ring-white scale-110' 
+                        : 'hover:scale-105'
+                    }`}
+                    title={option.name}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

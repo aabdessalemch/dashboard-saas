@@ -12,10 +12,12 @@ interface BarChartWidgetProps {
   onPositionChange?: (x: number, y: number) => void;
   onSizeChange?: (width: number, height: number) => void;
   onDataChange?: (data: any) => void;
+  onBringToFront?: () => void;
   initialX?: number;
   initialY?: number;
   initialWidth?: number;
   initialHeight?: number;
+  initialZIndex?: number;
   maxWidth?: number;
   initialData?: any;
 }
@@ -26,10 +28,12 @@ export default function BarChartWidget({
   onPositionChange, 
   onSizeChange,
   onDataChange,
+  onBringToFront,
   initialX = 0, 
   initialY = 0,
   initialWidth = 450,
   initialHeight = 280,
+  initialZIndex = 1,
   maxWidth = 1200,
   initialData
 }: BarChartWidgetProps) {
@@ -52,16 +56,17 @@ export default function BarChartWidget({
 
   const [showDataEditor, setShowDataEditor] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [modalKey, setModalKey] = useState(0);
   const [chartHeight, setChartHeight] = useState(initialHeight);
   const [chartWidth, setChartWidth] = useState(initialWidth);
   const [isResizing, setIsResizing] = useState(false);
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null);
   const [position, setPosition] = useState({ x: initialX, y: initialY });
+  const [zIndex, setZIndex] = useState(initialZIndex);
   const [isDragging, setIsDragging] = useState(false);
   
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Load initial data from AI
   useEffect(() => {
     if (initialData) {
       if (initialData.title) setTitle(initialData.title);
@@ -69,9 +74,13 @@ export default function BarChartWidget({
       if (initialData.colors) setColors(initialData.colors);
       if (initialData.settings) setSettings(initialData.settings);
     }
-  }, [initialData]);
+  }, []);
 
-  // Save data function
+  // Sync zIndex from parent when it changes
+  useEffect(() => {
+    setZIndex(initialZIndex);
+  }, [initialZIndex]);
+
   const saveData = () => {
     if (onDataChange) {
       onDataChange({
@@ -83,19 +92,41 @@ export default function BarChartWidget({
     }
   };
 
-  // Save when data changes
-  useEffect(() => {
-    saveData();
-  }, [title, data, colors, settings]);
-
   const handleSaveData = (newData: any[], newColors: string[]) => {
     setData(newData);
     setColors(newColors);
+    if (onDataChange) {
+      onDataChange({
+        title,
+        data: newData,
+        colors: newColors,
+        settings
+      });
+    }
+  };
+
+  const handleOpenDataEditor = () => {
+    setModalKey(prev => prev + 1);
+    setShowDataEditor(true);
+  };
+
+  const handleTitleBlur = () => {
+    setIsEditingTitle(false);
+    saveData();
   };
 
   const handleTitleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' || e.key === 'Escape') {
       setIsEditingTitle(false);
+      saveData();
+    }
+  };
+
+  const handleDuplicate = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (onDuplicate) {
+      onDuplicate();
     }
   };
 
@@ -108,6 +139,11 @@ export default function BarChartWidget({
     if (isEditingTitle) return;
     e.preventDefault();
     e.stopPropagation();
+    
+    // Bring to front when starting to drag
+    if (onBringToFront) {
+      onBringToFront();
+    }
     
     setIsDragging(true);
     const startX = e.clientX - position.x;
@@ -135,6 +171,11 @@ export default function BarChartWidget({
   const startResize = (direction: string) => (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+
+    // Bring to front when starting to resize
+    if (onBringToFront) {
+      onBringToFront();
+    }
 
     setIsResizing(true);
     const startX = e.clientX;
@@ -278,7 +319,13 @@ export default function BarChartWidget({
           position: 'absolute',
           left: `${position.x}px`,
           top: `${position.y}px`,
-          zIndex: isDragging ? 1000 : 1,
+          zIndex: isDragging ? 9999 : zIndex,
+        }}
+        onMouseDown={() => {
+          // Bring to front on any click
+          if (onBringToFront) {
+            onBringToFront();
+          }
         }}
       >
         <div 
@@ -290,12 +337,12 @@ export default function BarChartWidget({
         <div className="absolute top-4 right-4 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all duration-300 z-10">
           <WidgetEditMenu
             onEditTitle={() => setIsEditingTitle(true)}
-            onEditData={() => setShowDataEditor(true)}
+            onEditData={handleOpenDataEditor}
             onSettings={() => setShowSettings(true)}
           />
           {onDuplicate && (
             <button
-              onClick={onDuplicate}
+              onClick={handleDuplicate}
               className="w-8 h-8 rounded-lg bg-blue-500/20 hover:bg-blue-500 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
               title="Duplicate"
             >
@@ -306,7 +353,11 @@ export default function BarChartWidget({
             </button>
           )}
           <button
-            onClick={onDelete}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onDelete();
+            }}
             className="w-8 h-8 rounded-lg bg-red-500/20 hover:bg-red-500 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
           >
             <X size={16} />
@@ -326,7 +377,7 @@ export default function BarChartWidget({
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              onBlur={() => setIsEditingTitle(false)}
+              onBlur={handleTitleBlur}
               onKeyDown={handleTitleKeyDown}
               autoFocus
               className="bg-white/10 border border-white/40 rounded-lg px-3 py-1 text-white font-semibold focus:outline-none focus:border-blue-500 w-full"
@@ -374,6 +425,7 @@ export default function BarChartWidget({
       </div>
 
       <DataEditorModal
+        key={modalKey}
         isOpen={showDataEditor}
         onClose={() => setShowDataEditor(false)}
         currentData={data}
@@ -385,7 +437,10 @@ export default function BarChartWidget({
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
         settings={settings}
-        onSave={setSettings}
+        onSave={(newSettings) => {
+          setSettings(newSettings);
+          saveData();
+        }}
       />
     </>
   );

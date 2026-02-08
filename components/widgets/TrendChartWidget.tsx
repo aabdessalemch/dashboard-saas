@@ -12,10 +12,12 @@ interface TrendChartWidgetProps {
   onPositionChange?: (x: number, y: number) => void;
   onSizeChange?: (width: number, height: number) => void;
   onDataChange?: (data: any) => void;
+  onBringToFront?: () => void;
   initialX?: number;
   initialY?: number;
   initialWidth?: number;
   initialHeight?: number;
+  initialZIndex?: number;
   maxWidth?: number;
   initialData?: any;
 }
@@ -26,24 +28,75 @@ export default function TrendChartWidget({
   onPositionChange, 
   onSizeChange,
   onDataChange,
+  onBringToFront,
   initialX = 0, 
   initialY = 0,
   initialWidth = 450,
   initialHeight = 280,
+  initialZIndex = 1,
   maxWidth = 1200,
   initialData
 }: TrendChartWidgetProps) {
   const [title, setTitle] = useState(initialData?.title || "Trend Chart");
   const [isEditingTitle, setIsEditingTitle] = useState(false);
-  const [data, setData] = useState(initialData?.data || [
-    { name: "Week 1", value: 400 },
-    { name: "Week 2", value: 600 },
-    { name: "Week 3", value: 500 },
-    { name: "Week 4", value: 800 },
-    { name: "Week 5", value: 700 },
-    { name: "Week 6", value: 900 },
-  ]);
-  const [colors, setColors] = useState(initialData?.colors || ["#f59e0b", "#fb923c", "#f97316", "#ea580c", "#dc2626", "#b91c1c"]);
+  
+  // UNIVERSAL DATA SANITIZER - Works with ANY field names
+  const sanitizeData = (rawData: any[]) => {
+    if (!Array.isArray(rawData) || rawData.length === 0) return [];
+    
+    return rawData.map((item: any) => {
+      // Find ANY text-like field for the label (name)
+      const nameValue = item.name || item.date || item.label || item.month || 
+                       item.category || item.x || item.day || item.week || 
+                       item.quarter || item.year || item.period || item.time ||
+                       item.key || item.id || '';
+      
+      // Find ANY numeric field for the value
+      const numericValue = typeof item.value === 'number' ? item.value : 
+                          typeof item.amount === 'number' ? item.amount :
+                          typeof item.count === 'number' ? item.count :
+                          typeof item.total === 'number' ? item.total :
+                          typeof item.y === 'number' ? item.y :
+                          typeof item.val === 'number' ? item.val :
+                          typeof item.number === 'number' ? item.number :
+                          typeof item.sales === 'number' ? item.sales :
+                          typeof item.revenue === 'number' ? item.revenue :
+                          typeof item.price === 'number' ? item.price :
+                          typeof item.score === 'number' ? item.score : 0;
+      
+      return {
+        name: String(nameValue),
+        value: Number(numericValue)
+      };
+    });
+  };
+  
+  const [data, setData] = useState(() => {
+    if (initialData?.data && Array.isArray(initialData.data) && initialData.data.length > 0) {
+      console.log('📊 TrendChart: Loading initial data:', initialData.data);
+      const sanitized = sanitizeData(initialData.data);
+      console.log('✅ TrendChart: Sanitized to:', sanitized);
+      return sanitized;
+    }
+    return [
+      { name: "Week 1", value: 400 },
+      { name: "Week 2", value: 600 },
+      { name: "Week 3", value: 500 },
+      { name: "Week 4", value: 800 },
+      { name: "Week 5", value: 700 },
+      { name: "Week 6", value: 900 },
+    ];
+  });
+  
+  const [colors, setColors] = useState(() => {
+    if (initialData?.colors && Array.isArray(initialData.colors) && initialData.colors.length > 0) {
+      console.log('🎨 TrendChart: Loading initial colors:', initialData.colors);
+      return [initialData.colors[0]]; // Only first color
+    }
+    console.log('🎨 TrendChart: Using default orange color');
+    return ["#f59e0b"];
+  });
+  
   const [settings, setSettings] = useState(initialData?.settings || {
     showGrid: true,
     showLegend: false,
@@ -58,36 +111,75 @@ export default function TrendChartWidget({
   const [isResizing, setIsResizing] = useState(false);
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null);
   const [position, setPosition] = useState({ x: initialX, y: initialY });
+  const [zIndex, setZIndex] = useState(initialZIndex);
   const [isDragging, setIsDragging] = useState(false);
   
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Load AI data on mount
   useEffect(() => {
     if (initialData) {
-      if (initialData.title) setTitle(initialData.title);
-      if (initialData.data) setData(initialData.data);
-      if (initialData.colors) setColors(initialData.colors);
-      if (initialData.settings) setSettings(initialData.settings);
+      console.log('🔄 TrendChart: Received new initialData:', initialData);
+      
+      if (initialData.title) {
+        setTitle(initialData.title);
+      }
+      
+      if (initialData.data && Array.isArray(initialData.data) && initialData.data.length > 0) {
+        console.log('✅ TrendChart: Updating data:', initialData.data);
+        const sanitized = sanitizeData(initialData.data);
+        console.log('✅ TrendChart: Sanitized to:', sanitized);
+        setData(sanitized);
+      }
+      
+      if (initialData.colors && Array.isArray(initialData.colors) && initialData.colors.length > 0) {
+        console.log('✅ TrendChart: Updating colors to first color only');
+        setColors([initialData.colors[0]]);
+      }
+      
+      if (initialData.settings) {
+        setSettings(initialData.settings);
+      }
     }
-  }, []);
+  }, [initialData]);
 
-  const handleSaveData = (newData: any[], newColors: string[]) => {
-    setData(newData);
-    setColors(newColors);
+  useEffect(() => {
+    setZIndex(initialZIndex);
+  }, [initialZIndex]);
+
+  const saveData = () => {
     if (onDataChange) {
       onDataChange({
         title,
-        data: newData,
-        colors: newColors,
+        data,
+        colors,
         settings
       });
     }
   };
 
+  const handleSaveData = (newData: any[], newColors: string[]) => {
+    const sanitized = sanitizeData(newData);
+    setData(sanitized);
+    setColors([newColors[0]]);
+    if (onDataChange) {
+      onDataChange({
+        title,
+        data: sanitized,
+        colors: [newColors[0]],
+        settings
+      });
+    }
+  };
+
+  const handleTitleBlur = () => {
+    setIsEditingTitle(false);
+    saveData();
+  };
+
   const handleTitleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' || e.key === 'Escape') {
       setIsEditingTitle(false);
+      saveData();
     }
   };
 
@@ -100,6 +192,10 @@ export default function TrendChartWidget({
     if (isEditingTitle) return;
     e.preventDefault();
     e.stopPropagation();
+    
+    if (onBringToFront) {
+      onBringToFront();
+    }
     
     setIsDragging(true);
     const startX = e.clientX - position.x;
@@ -127,6 +223,10 @@ export default function TrendChartWidget({
   const startResize = (direction: string) => (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+
+    if (onBringToFront) {
+      onBringToFront();
+    }
 
     setIsResizing(true);
     const startX = e.clientX;
@@ -177,7 +277,7 @@ export default function TrendChartWidget({
     document.addEventListener('mouseup', handleMouseUp);
   };
 
-  const maxValue = Math.max(...data.map(d => d.value));
+  const maxValue = Math.max(...data.map(d => d.value), 1);
   const yAxisMax = Math.ceil(maxValue * 1.2);
 
   return (
@@ -192,7 +292,12 @@ export default function TrendChartWidget({
           position: 'absolute',
           left: `${position.x}px`,
           top: `${position.y}px`,
-          zIndex: isDragging ? 1000 : 1,
+          zIndex: isDragging ? 9999 : zIndex,
+        }}
+        onMouseDownCapture={() => {
+          if (onBringToFront) {
+            onBringToFront();
+          }
         }}
       >
         <div 
@@ -240,7 +345,7 @@ export default function TrendChartWidget({
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              onBlur={() => setIsEditingTitle(false)}
+              onBlur={handleTitleBlur}
               onKeyDown={handleTitleKeyDown}
               autoFocus
               className="bg-white/10 border border-white/40 rounded-lg px-3 py-1 text-white font-semibold focus:outline-none focus:border-blue-500 w-full"
@@ -312,6 +417,7 @@ export default function TrendChartWidget({
         currentData={data}
         currentColors={colors}
         onSave={handleSaveData}
+        singleColor={true}
       />
 
       <ChartSettingsModal

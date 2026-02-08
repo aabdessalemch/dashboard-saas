@@ -18,10 +18,12 @@ interface LineChartWidgetProps {
   onPositionChange?: (x: number, y: number) => void;
   onSizeChange?: (width: number, height: number) => void;
   onDataChange?: (data: any) => void;
+  onBringToFront?: () => void;
   initialX?: number;
   initialY?: number;
   initialWidth?: number;
   initialHeight?: number;
+  initialZIndex?: number;
   maxWidth?: number;
   initialData?: any;
 }
@@ -32,10 +34,12 @@ export default function LineChartWidget({
   onPositionChange, 
   onSizeChange,
   onDataChange,
+  onBringToFront,
   initialX = 0, 
   initialY = 0,
   initialWidth = 450,
   initialHeight = 280,
+  initialZIndex = 1,
   maxWidth = 1200,
   initialData
 }: LineChartWidgetProps) {
@@ -64,6 +68,7 @@ export default function LineChartWidget({
   const [isResizing, setIsResizing] = useState(false);
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null);
   const [position, setPosition] = useState({ x: initialX, y: initialY });
+  const [zIndex, setZIndex] = useState(initialZIndex);
   const [isDragging, setIsDragging] = useState(false);
 
   const [hoveredPoint, setHoveredPoint] = useState<number | null>(null);
@@ -74,7 +79,6 @@ export default function LineChartWidget({
   const hideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
 
-  // Load initial data from AI
   useEffect(() => {
     if (initialData) {
       if (initialData.title) setTitle(initialData.title);
@@ -84,7 +88,10 @@ export default function LineChartWidget({
     }
   }, [initialData]);
 
-  // Save data function
+  useEffect(() => {
+    setZIndex(initialZIndex);
+  }, [initialZIndex]);
+
   const saveData = () => {
     if (onDataChange) {
       onDataChange({
@@ -96,7 +103,6 @@ export default function LineChartWidget({
     }
   };
 
-  // Save when data changes
   useEffect(() => {
     saveData();
   }, [title, data, lineColor, settings]);
@@ -121,6 +127,10 @@ export default function LineChartWidget({
     if (isEditingTitle) return;
     e.preventDefault();
     e.stopPropagation();
+    
+    if (onBringToFront) {
+      onBringToFront();
+    }
     
     setIsDragging(true);
     const startX = e.clientX - position.x;
@@ -148,6 +158,10 @@ export default function LineChartWidget({
   const startResize = (direction: string) => (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+
+    if (onBringToFront) {
+      onBringToFront();
+    }
 
     setIsResizing(true);
     const startX = e.clientX;
@@ -311,7 +325,12 @@ export default function LineChartWidget({
           position: 'absolute',
           left: `${position.x}px`,
           top: `${position.y}px`,
-          zIndex: isDragging ? 1000 : 1,
+          zIndex: isDragging ? 9999 : zIndex,
+        }}
+        onMouseDownCapture={() => {
+          if (onBringToFront) {
+            onBringToFront();
+          }
         }}
       >
         <div 

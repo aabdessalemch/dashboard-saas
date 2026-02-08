@@ -1,7 +1,6 @@
 "use client";
 import { useState, useRef } from "react";
-import { X, Upload, Send, Sparkles, Image as ImageIcon, Loader2 } from "lucide-react";
-
+import { X, Send, Sparkles, Loader2, Image } from "lucide-react";
 interface AIAssistantProps {
   isOpen: boolean;
   onClose: () => void;
@@ -253,7 +252,7 @@ export default function AIAssistant({ isOpen, onClose, onGenerateWidgets }: AIAs
               disabled={isLoading}
               className="px-4 py-3 bg-white/10 hover:bg-white/20 text-white rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50"
             >
-              <ImageIcon size={20} />
+              <Image size={20} />
             </button>
             <input
               type="text"

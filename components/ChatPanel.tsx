@@ -1,11 +1,13 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
-import { Send, MessageSquare, X, Sparkles, Loader2, ChevronDown, ChevronUp } from "lucide-react";
+import { Send, MessageSquare, Sparkles, Loader2, ChevronDown, ChevronUp, Paperclip, X, FileText, Image as ImageIcon } from "lucide-react";
 
 interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
+  fileType?: 'csv' | 'image';
+  fileName?: string;
 }
 
 interface ChatPanelProps {
@@ -18,10 +20,12 @@ export default function ChatPanel({ onWidgetAction, currentWidgets }: ChatPanelP
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [uploadedFile, setUploadedFile] = useState<{type: 'csv' | 'image', data: string, name: string} | null>(null);
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load conversation history from localStorage
   useEffect(() => {
     const saved = localStorage.getItem('dashgen_chat_history');
     if (saved) {
@@ -33,78 +37,197 @@ export default function ChatPanel({ onWidgetAction, currentWidgets }: ChatPanelP
     }
   }, []);
 
-  // Save conversation to localStorage
   useEffect(() => {
     if (messages.length > 0) {
       localStorage.setItem('dashgen_chat_history', JSON.stringify(messages));
     }
   }, [messages]);
 
-  // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  useEffect(() => {
+    const handlePaste = async (e: ClipboardEvent) => {
+      if (!isExpanded) return;
+      
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') !== -1) {
+          e.preventDefault();
+          const file = items[i].getAsFile();
+          if (file) {
+            await handleImageFile(file);
+          }
+          break;
+        }
+      }
+    };
+
+    document.addEventListener('paste', handlePaste);
+    return () => document.removeEventListener('paste', handlePaste);
+  }, [isExpanded]);
+
+  const parseCSV = (text: string): string[][] => {
+    const lines = text.trim().split('\n');
+    return lines.map(line => {
+      const cells: string[] = [];
+      let current = '';
+      let inQuotes = false;
+      
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        
+        if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === ',' && !inQuotes) {
+          cells.push(current.trim());
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      cells.push(current.trim());
+      return cells;
+    });
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const fileType = file.type;
+    
+    if (fileType === 'text/csv' || file.name.endsWith('.csv')) {
+      const text = await file.text();
+      setUploadedFile({ type: 'csv', data: text, name: file.name });
+      setInput(`Create a table from this CSV: ${file.name}`);
+    } else if (fileType.startsWith('image/')) {
+      await handleImageFile(file);
+    } else {
+      alert('Please upload a CSV file or image (PNG, JPG, JPEG)');
+    }
+    
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handleImageFile = async (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const base64 = e.target?.result as string;
+      setUploadedFile({ type: 'image', data: base64, name: file.name });
+      setInput(`Analyze this image and create relevant widgets: ${file.name}`);
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+    if ((!input.trim() && !uploadedFile) || isLoading) return;
 
     const userMessage: Message = {
       role: 'user',
-      content: input.trim(),
-      timestamp: Date.now()
+      content: input.trim() || 'Uploaded file',
+      timestamp: Date.now(),
+      fileType: uploadedFile?.type,
+      fileName: uploadedFile?.name
     };
 
     setMessages(prev => [...prev, userMessage]);
+    const currentFile = uploadedFile;
     setInput("");
+    setUploadedFile(null);
     setIsLoading(true);
 
     try {
-      // Build context about current dashboard
       const dashboardContext = {
-        widgetCount: currentWidgets.length,
-        widgetTypes: currentWidgets.map((w: any) => ({ 
-          id: w.id, 
-          type: w.type,
-          title: w.data?.title || `${w.type} widget`
-        }))
+  widgetCount: currentWidgets.length,
+  widgetTypes: currentWidgets.map((w: any) => {
+    const info: any = { 
+      id: w.id, 
+      type: w.type,
+      title: w.data?.title || `${w.type} widget`
+    };
+    
+    // Include actual data so AI can read it
+    if (w.type === 'table' && w.data?.rows) {
+  info.tableData = {
+    columns: w.data.columns?.map((c: any) => c.header) || [],
+    rowCount: w.data.rows.length,
+    allRows: w.data.rows // SEND ALL ROWS, not just 5!
+  };
+}
+    else if (['bar', 'line', 'pie', 'trend'].includes(w.type) && w.data?.data) {
+      info.chartData = w.data.data.slice(0, 10); // First 10 data points
+    } else if (w.type === 'kpi') {
+      info.kpiData = {
+        value: w.data?.value,
+        change: w.data?.change
       };
+    }
+    
+    return info;
+  })
+};
+
+      const requestBody: any = {
+        message: userMessage.content,
+        conversationHistory: messages.slice(-5),
+        dashboardContext
+      };
+
+      if (currentFile) {
+        if (currentFile.type === 'csv') {
+          const csvData = parseCSV(currentFile.data);
+          requestBody.csvData = csvData;
+          requestBody.csvFileName = currentFile.name;
+        } else if (currentFile.type === 'image') {
+          requestBody.imageData = currentFile.data;
+          requestBody.imageFileName = currentFile.name;
+        }
+      }
+
+      console.log('📤 Sending to API:', requestBody);
 
       const response = await fetch('/api/chat-dashboard', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: input.trim(),
-          conversationHistory: messages.slice(-5), // Last 5 messages for context
-          dashboardContext
-        })
+        body: JSON.stringify(requestBody)
       });
 
+      console.log('📥 Response status:', response.status);
+
       if (!response.ok) {
-        throw new Error('Failed to get response');
+        const errorText = await response.text();
+        console.error('❌ API Error:', errorText);
+        throw new Error(`API error (${response.status})`);
       }
 
       const data = await response.json();
+      console.log('✅ API Success:', data);
 
-      // Add assistant response
       const assistantMessage: Message = {
         role: 'assistant',
-        content: data.message,
+        content: data.message || 'Done!',
         timestamp: Date.now()
       };
       setMessages(prev => [...prev, assistantMessage]);
 
-      // Execute actions if any
       if (data.actions && data.actions.length > 0) {
+        console.log('🎯 Executing actions:', data.actions);
         data.actions.forEach((action: any) => {
           onWidgetAction(action);
         });
       }
 
-    } catch (error) {
-      console.error('Chat error:', error);
+    } catch (error: any) {
+      console.error('❌ Chat error:', error);
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: 'Sorry, I encountered an error. Please try again.',
+        content: `❌ ${error.message}`,
         timestamp: Date.now()
       }]);
     } finally {
@@ -124,7 +247,6 @@ export default function ChatPanel({ onWidgetAction, currentWidgets }: ChatPanelP
 
   return (
     <div className="flex flex-col h-full bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 overflow-hidden">
-      {/* Header */}
       <div 
         className="flex items-center justify-between p-4 border-b border-white/10 cursor-pointer hover:bg-white/5 transition-colors"
         onClick={() => setIsExpanded(!isExpanded)}
@@ -135,7 +257,7 @@ export default function ChatPanel({ onWidgetAction, currentWidgets }: ChatPanelP
           </div>
           <div>
             <h3 className="text-sm font-semibold text-white">AI Assistant</h3>
-            <p className="text-xs text-gray-400">Modify your dashboard</p>
+            <p className="text-xs text-gray-400">Chat, upload CSV, paste images</p>
           </div>
         </div>
         <button className="text-white hover:bg-white/10 rounded-lg p-1 transition-colors">
@@ -143,7 +265,6 @@ export default function ChatPanel({ onWidgetAction, currentWidgets }: ChatPanelP
         </button>
       </div>
 
-      {/* Chat Area */}
       {isExpanded && (
         <>
           <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[300px] max-h-[500px]">
@@ -153,21 +274,28 @@ export default function ChatPanel({ onWidgetAction, currentWidgets }: ChatPanelP
                   <Sparkles size={24} className="text-white" />
                 </div>
                 <p className="text-white text-sm font-medium mb-1">Start a Conversation</p>
-                <p className="text-gray-400 text-xs max-w-[200px]">
-                  Ask me to modify widgets, add new ones, or change values
+                <p className="text-gray-400 text-xs max-w-[220px] mb-4">
+                  Chat, upload CSV files, or paste screenshots (Ctrl+V)
                 </p>
-                <div className="mt-4 space-y-2 w-full">
+                <div className="space-y-2 w-full">
                   <button
-                    onClick={() => setInput("Change the revenue KPI to $600K")}
+                    onClick={() => setInput("Create a table with months of the year")}
                     className="w-full text-left px-3 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-xs text-gray-300 transition-colors"
                   >
-                    💡 "Change the revenue KPI to $600K"
+                    💡 "Create a table with months"
                   </button>
                   <button
-                    onClick={() => setInput("Add a text box saying Welcome")}
+                    onClick={() => setInput("Add 3 KPIs for revenue, users, growth")}
                     className="w-full text-left px-3 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-xs text-gray-300 transition-colors"
                   >
-                    💡 "Add a text box saying Welcome"
+                    💡 "Add 3 KPIs"
+                  </button>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full text-left px-3 py-2 bg-blue-500/20 hover:bg-blue-500/30 rounded-lg text-xs text-blue-300 transition-colors flex items-center gap-2"
+                  >
+                    <Paperclip size={12} />
+                    📎 Upload CSV or Image
                   </button>
                 </div>
               </div>
@@ -185,6 +313,12 @@ export default function ChatPanel({ onWidgetAction, currentWidgets }: ChatPanelP
                           : 'bg-white/10 text-white border border-white/10'
                       }`}
                     >
+                      {msg.fileType && (
+                        <div className="flex items-center gap-1.5 mb-1 text-[10px] opacity-80">
+                          {msg.fileType === 'csv' ? <FileText size={10} /> : <ImageIcon size={10} />}
+                          <span>{msg.fileName}</span>
+                        </div>
+                      )}
                       <p className="text-xs whitespace-pre-wrap">{msg.content}</p>
                       <p className={`text-[10px] mt-1 ${
                         msg.role === 'user' ? 'text-blue-200' : 'text-gray-400'
@@ -198,7 +332,7 @@ export default function ChatPanel({ onWidgetAction, currentWidgets }: ChatPanelP
                   <div className="flex justify-start">
                     <div className="bg-white/10 text-white border border-white/10 rounded-xl px-3 py-2 flex items-center gap-2">
                       <Loader2 size={14} className="animate-spin text-blue-400" />
-                      <span className="text-xs">Thinking...</span>
+                      <span className="text-xs">Processing{uploadedFile ? ' file' : ''}...</span>
                     </div>
                   </div>
                 )}
@@ -207,7 +341,6 @@ export default function ChatPanel({ onWidgetAction, currentWidgets }: ChatPanelP
             )}
           </div>
 
-          {/* Clear History Button */}
           {messages.length > 0 && (
             <div className="px-4 pb-2">
               <button
@@ -219,9 +352,36 @@ export default function ChatPanel({ onWidgetAction, currentWidgets }: ChatPanelP
             </div>
           )}
 
-          {/* Input Area */}
           <div className="p-4 border-t border-white/10">
+            {uploadedFile && (
+              <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-blue-500/20 rounded-lg border border-blue-500/30">
+                {uploadedFile.type === 'csv' ? <FileText size={14} className="text-blue-400" /> : <ImageIcon size={14} className="text-blue-400" />}
+                <span className="text-xs text-blue-300 flex-1 truncate">{uploadedFile.name}</span>
+                <button
+                  onClick={() => setUploadedFile(null)}
+                  className="text-blue-400 hover:text-white transition-colors"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
+            
             <div className="flex gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv,image/*"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isLoading}
+                className="px-3 py-2 bg-white/5 hover:bg-white/10 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+                title="Upload CSV or Image"
+              >
+                <Paperclip size={16} />
+              </button>
               <input
                 ref={inputRef}
                 type="text"
@@ -233,13 +393,13 @@ export default function ChatPanel({ onWidgetAction, currentWidgets }: ChatPanelP
                     handleSend();
                   }
                 }}
-                placeholder="Ask me to modify your dashboard..."
+                placeholder="Type message or paste image (Ctrl+V)..."
                 disabled={isLoading}
                 className="flex-1 bg-white/5 border border-white/20 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-400 focus:outline-none focus:border-blue-500 disabled:opacity-50"
               />
               <button
                 onClick={handleSend}
-                disabled={isLoading || !input.trim()}
+                disabled={isLoading || (!input.trim() && !uploadedFile)}
                 className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center gap-2"
               >
                 {isLoading ? (
@@ -250,7 +410,7 @@ export default function ChatPanel({ onWidgetAction, currentWidgets }: ChatPanelP
               </button>
             </div>
             <p className="text-[10px] text-gray-500 mt-2">
-              Press Enter to send • Currently {currentWidgets.length} widgets on dashboard
+              📎 Upload CSV/Image • Ctrl+V to paste • {currentWidgets.length} widgets
             </p>
           </div>
         </>

@@ -4,230 +4,351 @@ export async function POST(request: NextRequest) {
   console.log('💬 Chat API called!');
   
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY;
+    
+    console.log('🔑 Checking API keys...');
+    console.log('NEXT_PUBLIC_ANTHROPIC_API_KEY:', process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY ? '✅ Found' : '❌ Missing');
+    console.log('ANTHROPIC_API_KEY:', process.env.ANTHROPIC_API_KEY ? '✅ Found' : '❌ Missing');
+    console.log('GEMINI_API_KEY:', process.env.GEMINI_API_KEY ? '✅ Found' : '❌ Missing');
     
     if (!apiKey) {
-      console.error('No API key found');
+      console.error('❌ No API key found in any environment variable');
       return NextResponse.json({ 
-        message: 'API key not configured. Please check your .env file.',
+        message: 'API key not configured. Check your .env.local file.',
         actions: []
       });
     }
 
-    const { message, conversationHistory, dashboardContext } = await request.json();
+    console.log('✅ Using API key:', apiKey.substring(0, 15) + '...');
+
+    const { message, conversationHistory, dashboardContext, csvData, csvFileName, imageData, imageFileName } = await request.json();
     
     console.log('💬 User message:', message);
-    console.log('📊 Dashboard context:', dashboardContext);
+    console.log('📊 Dashboard context:', JSON.stringify(dashboardContext, null, 2));
+    if (csvData) console.log('📄 CSV uploaded:', csvFileName);
+    if (imageData) console.log('🖼️ Image uploaded:', imageFileName);
 
-    const listUrl = `https://generativelanguage.googleapis.com/v1/models?key=${apiKey}`;
-    const listResponse = await fetch(listUrl);
-    
-    if (!listResponse.ok) {
-      console.error('Failed to list models');
-      return NextResponse.json({ 
-        message: 'Failed to connect to AI service.',
-        actions: []
-      });
-    }
+    const isGeminiKey = apiKey.startsWith('AIza');
+    const isAnthropicKey = apiKey.startsWith('sk-ant-');
 
-    const modelsList = await listResponse.json();
-    const availableModel = modelsList.models?.find((m: any) => 
-      m.supportedGenerationMethods?.includes('generateContent')
-    );
-
-    if (!availableModel) {
-      console.error('No models available');
-      return NextResponse.json({ 
-        message: 'AI model not available.',
-        actions: []
-      });
-    }
-
-    const widgetSummary = dashboardContext.widgetTypes
-      .map((w: any, idx: number) => `${idx + 1}. ${w.type} - "${w.title}" (ID: ${w.id})`)
-      .join('\n');
-
-    let promptText = `You are a dashboard assistant helping users modify widgets.
-
-CURRENT DASHBOARD (${dashboardContext.widgetCount} widgets):
-${widgetSummary || 'Empty dashboard'}
-
-USER REQUEST: "${message}"
-
-YOUR TASK: Respond with ONLY valid JSON in this exact format:
-
-{
-  "message": "your friendly response here",
-  "actions": [array of actions or empty array]
-}
-
-ACTION TYPES:
-
-1. ADD new widgets:
-{
-  "type": "add",
-  "widgets": [
-    {"type":"kpi","data":{"title":"Revenue","value":"500","unit":"K","trend":"up","trendValue":"10"}}
-  ]
-}
-
-2. MODIFY widget (find by searching dashboard):
-{
-  "type": "modify",
-  "widgetId": "SEARCH_FOR_KPI",
-  "data": {"value": "800"}
-}
-
-3. DELETE widget:
-{
-  "type": "delete",
-  "widgetType": "pie"
-}
-
-WIDGET TYPES: kpi, bar, line, trend, pie, table, text
-
-EXAMPLES:
-
-Request: "Add a KPI showing revenue of $500K"
-Response:
-{
-  "message": "I'll add a revenue KPI showing $500K!",
-  "actions": [{
-    "type": "add",
-    "widgets": [{"type":"kpi","data":{"title":"Revenue","value":"500","unit":"K","trend":"up","trendValue":"0"}}]
-  }]
-}
-
-Request: "Delete the pie chart"
-Response:
-{
-  "message": "I'll remove the pie chart.",
-  "actions": [{"type":"delete","widgetType":"pie"}]
-}
-
-Request: "What widgets do I have?"
-Response:
-{
-  "message": "You have ${dashboardContext.widgetCount} widgets: ${dashboardContext.widgetTypes.map((w: any) => w.title).join(', ')}",
-  "actions": []
-}
-
-CRITICAL:
-- Return ONLY valid JSON
-- No markdown, no code blocks, no extra text
-- Always include both "message" and "actions" fields
-- Keep messages friendly and conversational
-
-Now respond to: "${message}"`;
-
-    const parts: any[] = [{ text: promptText }];
-
-    if (conversationHistory && conversationHistory.length > 0) {
-      const recent = conversationHistory.slice(-3);
-      const historyText = recent
-        .map((msg: any) => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
-        .join('\n');
-      parts.push({ text: `\nRECENT CONVERSATION:\n${historyText}` });
-    }
-
-    const generateUrl = `https://generativelanguage.googleapis.com/v1/${availableModel.name}:generateContent?key=${apiKey}`;
-    
-    console.log('🤖 Calling Gemini...');
-    
-    const response = await fetch(generateUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ 
-        contents: [{ parts }],
-        generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens: 4096,
-        }
-      })
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      console.error('Gemini API error:', error);
-      return NextResponse.json({ 
-        message: "I'm having trouble connecting to the AI. Please try again.",
-        actions: []
-      });
-    }
-
-    const data = await response.json();
-    let text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    
-    console.log('🤖 RAW AI RESPONSE:', text);
-    
-    // Clean response
-    text = text.trim();
-    text = text.replace(/```json\n?/g, '').replace(/```\n?/g, '');
-    
-    // Find JSON object
-    const jsonStart = text.indexOf('{');
-    const jsonEnd = text.lastIndexOf('}');
-    
-    if (jsonStart === -1 || jsonEnd === -1) {
-      console.error('No JSON found in response');
-      return NextResponse.json({
-        message: "I understood your request! Try: 'Add a KPI card' or 'Delete the table'",
-        actions: []
-      });
-    }
-    
-    text = text.substring(jsonStart, jsonEnd + 1);
-    
-    console.log('🧹 CLEANED RESPONSE:', text);
-    
-    try {
-      const parsed = JSON.parse(text);
-      console.log('✅ PARSED RESPONSE:', parsed);
+    if (isGeminiKey) {
+      console.log('🤖 Using Gemini API');
       
-      // Validate structure
-      if (!parsed.message || !Array.isArray(parsed.actions)) {
-        console.error('Invalid response structure:', parsed);
-        return NextResponse.json({
-          message: "Got it! What would you like to change?",
+      const listUrl = `https://generativelanguage.googleapis.com/v1/models?key=${apiKey}`;
+      const listResponse = await fetch(listUrl);
+      
+      if (!listResponse.ok) {
+        return NextResponse.json({ 
+          message: 'Failed to connect to AI service.',
           actions: []
         });
       }
 
-      // Process actions to find widget IDs
-      if (parsed.actions && parsed.actions.length > 0) {
-        parsed.actions = parsed.actions.map((action: any) => {
-          if (action.widgetId && typeof action.widgetId === 'string' && action.widgetId.includes('SEARCH')) {
-            // Find widget by type
-            const searchTerm = action.widgetId.toLowerCase().replace('search_for_', '');
-            const widget = dashboardContext.widgetTypes.find((w: any) => 
-              w.type.toLowerCase() === searchTerm || 
-              w.title.toLowerCase().includes(searchTerm)
-            );
-            if (widget) {
-              action.widgetId = widget.id;
-              console.log(`✅ Mapped ${searchTerm} to widget ID: ${widget.id}`);
-            }
-          }
-          return action;
+      const modelsList = await listResponse.json();
+      const availableModel = modelsList.models?.find((m: any) => 
+        m.supportedGenerationMethods?.includes('generateContent')
+      );
+
+      if (!availableModel) {
+        return NextResponse.json({ 
+          message: 'AI model not available.',
+          actions: []
         });
       }
+
+      // Build detailed widget context
+      const widgetDetails = dashboardContext.widgetTypes?.map((w: any, i: number) => {
+        let desc = `${i+1}. ${w.type.toUpperCase()}: "${w.title}" (ID: ${w.id})`;
+        
+        console.log(`\n🔍 Widget ${i+1}:`, w.type);
+        
+        if (w.tableData) {
+          console.log('✅ Table data found!');
+          console.log('Columns:', w.tableData.columns);
+          console.log('Row count:', w.tableData.rowCount);
+          console.log('All rows:', w.tableData.allRows);
+          
+          desc += `\n   📊 Table with ${w.tableData.rowCount} rows`;
+          desc += `\n   📋 Columns: ${w.tableData.columns.join(', ')}`;
+          
+          if (w.tableData.allRows && w.tableData.allRows.length > 0) {
+            desc += `\n   📄 COMPLETE TABLE DATA (${w.tableData.allRows.length} rows):\n`;
+            w.tableData.allRows.forEach((row: any, idx: number) => {
+              const rowValues = Object.values(row).map((cell: any) => {
+                if (typeof cell === 'object' && cell.value !== undefined) {
+                  return cell.value;
+                }
+                return cell;
+              }).join(' | ');
+              
+              if (idx === 0) {
+                desc += `      HEADERS: ${rowValues}\n`;
+              } else {
+                desc += `      ROW ${idx}: ${rowValues}\n`;
+              }
+            });
+            console.log('✅ Table data added to prompt');
+          } else {
+            console.log('❌ No allRows found!');
+          }
+        }
+        
+        if (w.chartData) {
+          desc += `\n   📈 Chart Data: ${JSON.stringify(w.chartData.slice(0, 5))}`;
+        }
+        
+        if (w.kpiData) {
+          desc += `\n   💰 KPI: ${w.kpiData.value}, ${w.kpiData.change}`;
+        }
+        
+        return desc;
+      }).join('\n\n') || 'No widgets on dashboard';
+
+      console.log('\n📋 WIDGET DETAILS FOR AI:\n', widgetDetails);
+
+      let promptText = `You are an EXPERT dashboard AI.
+
+═══════════════════════════════════════════════════════════════
+CURRENT DASHBOARD (${dashboardContext.widgetCount} widgets):
+═══════════════════════════════════════════════════════════════
+${widgetDetails}
+
+═══════════════════════════════════════════════════════════════
+USER REQUEST: "${message}"
+═══════════════════════════════════════════════════════════════
+
+${csvData ? `
+📄 CSV FILE: "${csvFileName}"
+Headers: ${csvData[0]?.join(', ')}
+Rows: ${csvData.length - 1}
+
+COMPLETE DATA:
+${csvData.map((row: string[], idx: number) => {
+  if (idx === 0) return `HEADERS: ${row.join(' | ')}`;
+  return `ROW ${idx}: ${row.join(' | ')}`;
+}).join('\n')}
+
+⚠️ USE EXACT CSV NUMBERS ⚠️
+` : ''}
+
+${imageData ? `🖼️ IMAGE: "${imageFileName}"` : ''}
+
+CRITICAL INSTRUCTIONS FOR CREATING CHARTS FROM TABLES:
+When user asks to create a chart from a table:
+1. Look at the COMPLETE TABLE DATA above
+2. Find the numeric column (second column usually)
+3. Use EXACT row labels and values from the table
+4. Convert any formatted numbers ($12,000) to plain numbers (12000)
+
+EXAMPLE - If table shows:
+HEADERS: Month | Revenue
+ROW 1: January | $5,000
+ROW 2: February | $7,500
+
+Then create:
+{"type":"trend","data":{"title":"Revenue Trend","data":[
+  {"name":"January","value":5000},
+  {"name":"February","value":7500}
+]}}
+
+═══════════════════════════════════════════════════════════════
+WIDGET FORMATS (USE EXACT FORMAT):
+═══════════════════════════════════════════════════════════════
+
+TREND: {"type":"trend","data":{"title":"Title","data":[{"name":"Jan","value":1000},{"name":"Feb","value":2000}]}}
+BAR: {"type":"bar","data":{"title":"Title","data":[{"name":"Q1","value":245000}]}}
+LINE: {"type":"line","data":{"title":"Title","data":[{"name":"Jan","value":12000}]}}
+PIE: {"type":"pie","data":{"title":"Title","data":[{"name":"A","value":4500}]}}
+KPI: {"type":"kpi","data":{"title":"Revenue","value":"$2.4M","change":"+18.5%"}}
+TABLE: {"type":"table","data":{"title":"Data","rows":[[{"value":"H1"}],[{"value":"D1"}]]}}
+
+⚠️ ALL CHARTS MUST USE: {"name":"text","value":NUMBER}
+- "value" must be NUMBER (not string, no $ or commas)
+- Use "name" (NOT "date", "label", "month")
+- Use "value" (NOT "amount", "count", "total")
+
+Return: {"message":"text","actions":[{"type":"add","widgets":[...]}]}`;
+
+      const parts: any[] = [{ text: promptText }];
+
+      if (imageData) {
+        const base64Image = imageData.split(',')[1];
+        parts.push({
+          inline_data: {
+            mime_type: "image/jpeg",
+            data: base64Image
+          }
+        });
+      }
+
+      const generateUrl = `https://generativelanguage.googleapis.com/v1/${availableModel.name}:generateContent?key=${apiKey}`;
       
-      return NextResponse.json(parsed);
+      console.log('🤖 Calling Gemini API...');
       
-    } catch (e) {
-      console.error('❌ PARSE ERROR:', e);
-      console.error('Failed to parse:', text.substring(0, 200));
+      const response = await fetch(generateUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          contents: [{ parts }],
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 8192,
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        console.error('❌ Gemini API error:', error);
+        return NextResponse.json({ 
+          message: "I'm having trouble processing this. Please try again.",
+          actions: []
+        });
+      }
+
+      const data = await response.json();
+      let text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
       
+      console.log('📥 Raw AI response:', text.substring(0, 200) + '...');
+      
+      text = text.trim().replace(/```json\n?/g, '').replace(/```\n?/g, '');
+      const jsonStart = text.indexOf('{');
+      const jsonEnd = text.lastIndexOf('}');
+      
+      if (jsonStart !== -1 && jsonEnd !== -1) {
+        text = text.substring(jsonStart, jsonEnd + 1);
+        try {
+          const parsed = JSON.parse(text);
+          
+          console.log('✅ Parsed JSON:', JSON.stringify(parsed, null, 2));
+          
+          // AUTO-FIX: Convert any field to "name" and "value"
+          if (parsed.actions) {
+            parsed.actions.forEach((action: any) => {
+              if (action.widgets) {
+                action.widgets.forEach((widget: any) => {
+                  if (['bar', 'line', 'pie', 'trend'].includes(widget.type) && widget.data?.data) {
+                    const before = JSON.stringify(widget.data.data[0]);
+                    widget.data.data = widget.data.data.map((item: any) => ({
+                      name: item.name || item.date || item.label || item.month || item.category || item.x || '',
+                      value: typeof item.value === 'number' ? item.value : 
+                             typeof item.amount === 'number' ? item.amount :
+                             typeof item.count === 'number' ? item.count :
+                             typeof item.total === 'number' ? item.total :
+                             typeof item.y === 'number' ? item.y : 0
+                    }));
+                    const after = JSON.stringify(widget.data.data[0]);
+                    console.log(`✅ Fixed ${widget.type}: ${before} → ${after}`);
+                  }
+                });
+              }
+            });
+          }
+          
+          return NextResponse.json(parsed);
+        } catch (e) {
+          console.error('❌ JSON Parse error:', e);
+          console.error('Failed JSON:', text);
+        }
+      }
+
       return NextResponse.json({
-        message: "I'm thinking... Try asking: 'Add a revenue KPI' or 'Show me what widgets I have'",
+        message: "Processing your request...",
+        actions: []
+      });
+
+    } else if (isAnthropicKey) {
+      console.log('🤖 Using Anthropic Claude API');
+      
+      const widgetDetails = dashboardContext.widgetTypes?.map((w: any) => {
+        let desc = `${w.type}: "${w.title}" (${w.id})`;
+        if (w.tableData) {
+          desc += ` | ${w.tableData.rowCount} rows`;
+          if (w.tableData.allRows) {
+            desc += ` | Data: ${JSON.stringify(w.tableData.allRows.slice(0, 3))}`;
+          }
+        }
+        if (w.chartData) desc += ` | Chart: ${JSON.stringify(w.chartData.slice(0, 3))}`;
+        if (w.kpiData) desc += ` | ${w.kpiData.value} ${w.kpiData.change}`;
+        return desc;
+      }).join(', ') || 'No widgets';
+
+      const systemPrompt = `You are a dashboard AI.
+
+Dashboard: ${widgetDetails}
+
+Charts use: {"name":"text","value":NUMBER}
+
+Return: {"message":"text","actions":[{"type":"add","widgets":[...]}]}`;
+
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-3-5-sonnet-20241022',
+          max_tokens: 4096,
+          messages: [
+            { role: 'user', content: systemPrompt },
+            { role: 'user', content: message }
+          ],
+        }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error?.message || 'Claude API error');
+      }
+
+      const data = await response.json();
+      const reply = data.content[0].text;
+
+      const jsonMatch = reply.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]);
+          
+          // AUTO-FIX
+          if (parsed.actions) {
+            parsed.actions.forEach((action: any) => {
+              if (action.widgets) {
+                action.widgets.forEach((widget: any) => {
+                  if (['bar', 'line', 'pie', 'trend'].includes(widget.type) && widget.data?.data) {
+                    widget.data.data = widget.data.data.map((item: any) => ({
+                      name: item.name || item.date || item.label || item.month || '',
+                      value: typeof item.value === 'number' ? item.value : 
+                             typeof item.amount === 'number' ? item.amount : 0
+                    }));
+                  }
+                });
+              }
+            });
+          }
+          
+          return NextResponse.json(parsed);
+        } catch (e) {
+          console.error('Parse error:', e);
+        }
+      }
+
+      return NextResponse.json({
+        message: reply,
         actions: []
       });
     }
 
+    return NextResponse.json({
+      message: "Invalid API key format",
+      actions: []
+    });
+
   } catch (error: any) {
     console.error('❌ Fatal Error:', error);
     return NextResponse.json({ 
-      message: "Something went wrong. Please try again.",
+      message: `Error: ${error.message}`,
       actions: []
     });
   }

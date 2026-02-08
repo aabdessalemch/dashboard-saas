@@ -1,6 +1,7 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
 import { X, Plus, Trash2, Settings, Palette, Save, ArrowDown, ArrowRight } from "lucide-react";
+import CreateChartModal from "./CreateChartModal";
 
 interface TableWidgetProps {
   onDelete: () => void;
@@ -8,10 +9,12 @@ interface TableWidgetProps {
   onPositionChange?: (x: number, y: number) => void;
   onSizeChange?: (width: number, height: number) => void;
   onDataChange?: (data: any) => void;
+  onBringToFront?: () => void;
   initialX?: number;
   initialY?: number;
   initialWidth?: number;
   initialHeight?: number;
+  initialZIndex?: number;
   maxWidth?: number;
   initialData?: any;
 }
@@ -26,14 +29,15 @@ export default function TableWidget({
   onPositionChange, 
   onSizeChange,
   onDataChange,
+  onBringToFront,
   initialX = 0, 
   initialY = 0,
   initialWidth = 700,
   initialHeight = 500,
+  initialZIndex = 1,
   maxWidth = 1200,
   initialData
 }: TableWidgetProps) {
-  // NORMALIZE AI DATA - ONLY 3 LINES CHANGED (28-56)
   const normalizeRows = (data: any): Cell[][] => {
     const defaultRows = [
       [{ value: "Product" }, { value: "Q1" }, { value: "Q2" }, { value: "Q3" }],
@@ -60,7 +64,6 @@ export default function TableWidget({
   const [title, setTitle] = useState(initialData?.title || "Data Table");
   const [rows, setRows] = useState<Cell[][]>(normalizeRows(initialData?.rows));
   
-  // Column and row sizing
   const [columnWidths, setColumnWidths] = useState<number[]>(
     initialData?.columnWidths || [180, 120, 120, 120]
   );
@@ -68,58 +71,46 @@ export default function TableWidget({
     initialData?.rowHeights || Array(4).fill(44)
   );
   
-  // Colors
   const [headerBgColor, setHeaderBgColor] = useState(initialData?.headerBgColor || "#3b82f6");
   const [rowBgColor, setRowBgColor] = useState(initialData?.rowBgColor || "rgba(255, 255, 255, 0.05)");
   const [alternateRowColor, setAlternateRowColor] = useState(initialData?.alternateRowColor || "rgba(255, 255, 255, 0.02)");
   const [textColor, setTextColor] = useState(initialData?.textColor || "#ffffff");
   const [borderColor, setBorderColor] = useState(initialData?.borderColor || "rgba(255, 255, 255, 0.1)");
   
-  // Individual row/column colors
   const [customRowColors, setCustomRowColors] = useState<{[key: number]: string}>(initialData?.customRowColors || {});
   const [customColumnColors, setCustomColumnColors] = useState<{[key: number]: string}>(initialData?.customColumnColors || {});
-  
-  // Individual row/column text colors
   const [customRowTextColors, setCustomRowTextColors] = useState<{[key: number]: string}>(initialData?.customRowTextColors || {});
   const [customColumnTextColors, setCustomColumnTextColors] = useState<{[key: number]: string}>(initialData?.customColumnTextColors || {});
-  
-  // Bold state for rows and columns
   const [customRowBold, setCustomRowBold] = useState<{[key: number]: boolean}>(initialData?.customRowBold || {});
   const [customColumnBold, setCustomColumnBold] = useState<{[key: number]: boolean}>(initialData?.customColumnBold || {});
-  
-  // Cell-specific colors (stored as "row-col": color)
   const [customCellColors, setCustomCellColors] = useState<{[key: string]: string}>(initialData?.customCellColors || {});
   const [customCellTextColors, setCustomCellTextColors] = useState<{[key: string]: string}>(initialData?.customCellTextColors || {});
   const [customCellBold, setCustomCellBold] = useState<{[key: string]: boolean}>(initialData?.customCellBold || {});
-  
-  // Text sizes
   const [customRowTextSizes, setCustomRowTextSizes] = useState<{[key: number]: number}>(initialData?.customRowTextSizes || {});
   const [customColumnTextSizes, setCustomColumnTextSizes] = useState<{[key: number]: number}>(initialData?.customColumnTextSizes || {});
   const [customCellTextSizes, setCustomCellTextSizes] = useState<{[key: string]: number}>(initialData?.customCellTextSizes || {});
   
-  // UI State
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editingCell, setEditingCell] = useState<{ row: number; col: number } | null>(null);
   const [showEditPanel, setShowEditPanel] = useState(false);
   const [selectedRow, setSelectedRow] = useState<number | null>(null);
   const [selectedColumn, setSelectedColumn] = useState<number | null>(null);
   const [headerColorMode, setHeaderColorMode] = useState<'cell' | 'row' | 'column'>('cell');
+  const [showCreateChart, setShowCreateChart] = useState(false);
   
   const [width, setWidth] = useState(initialWidth);
   const [height, setHeight] = useState(initialHeight);
   const [position, setPosition] = useState({ x: initialX, y: initialY });
+  const [zIndex, setZIndex] = useState(initialZIndex);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const [hoveredEdge, setHoveredEdge] = useState<string | null>(null);
-  
-  // Resizing columns/rows
   const [resizingColumn, setResizingColumn] = useState<number | null>(null);
   const [resizingRow, setResizingRow] = useState<number | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const editPanelRef = useRef<HTMLDivElement>(null);
 
-  // Click outside to close edit panel and deselect rows/columns
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
@@ -137,10 +128,12 @@ export default function TableWidget({
     };
 
     document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showEditPanel]);
+
+  useEffect(() => {
+    setZIndex(initialZIndex);
+  }, [initialZIndex]);
 
   const saveData = () => {
     if (onDataChange) {
@@ -169,6 +162,30 @@ export default function TableWidget({
       });
     }
   };
+
+  const handleCreateChart = (chartType: string, xColumn: number, yColumn: number, startRow: number, endRow: number) => {
+  const chartData = rows.slice(startRow, endRow + 1).map(row => {
+    const name = row[xColumn]?.value || '';
+    const valueStr = row[yColumn]?.value || '0';
+    const cleanValue = valueStr.replace(/[$,KkMm%]/g, '');
+    const value = parseFloat(cleanValue) || 0;
+    
+    return chartType === 'trend' 
+      ? { date: name, value }
+      : { name, value };
+  }).filter(item => (item.name || item.date) && !isNaN(item.value));
+
+  const chartTitle = `${title} - ${chartType.charAt(0).toUpperCase() + chartType.slice(1)}`;
+
+  if (onDataChange) {
+    onDataChange({
+      action: 'create_chart',
+      chartType,
+      chartData,
+      chartTitle
+    });
+  }
+};
 
   const handleCellChange = (rowIndex: number, colIndex: number, value: string) => {
     const newRows = [...rows];
@@ -298,6 +315,10 @@ export default function TableWidget({
     e.preventDefault();
     e.stopPropagation();
     
+    if (onBringToFront) {
+      onBringToFront();
+    }
+    
     setIsDragging(true);
     const startX = e.clientX - position.x;
     const startY = e.clientY - position.y;
@@ -322,6 +343,10 @@ export default function TableWidget({
   const startResize = (direction: string) => (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+
+    if (onBringToFront) {
+      onBringToFront();
+    }
 
     setIsResizing(true);
     const startX = e.clientX;
@@ -432,27 +457,11 @@ export default function TableWidget({
     
     if (onDataChange) {
       onDataChange({
-        title,
-        rows,
-        columnWidths,
-        rowHeights,
-        headerBgColor,
-        rowBgColor,
-        alternateRowColor,
-        textColor,
-        borderColor,
-        customRowColors: newCustomRowColors,
-        customColumnColors,
-        customRowTextColors,
-        customColumnTextColors,
-        customRowBold,
-        customColumnBold,
-        customCellColors,
-        customCellTextColors,
-        customCellBold,
-        customRowTextSizes,
-        customColumnTextSizes,
-        customCellTextSizes
+        title, rows, columnWidths, rowHeights, headerBgColor, rowBgColor, alternateRowColor,
+        textColor, borderColor, customRowColors: newCustomRowColors, customColumnColors,
+        customRowTextColors, customColumnTextColors, customRowBold, customColumnBold,
+        customCellColors, customCellTextColors, customCellBold, customRowTextSizes,
+        customColumnTextSizes, customCellTextSizes
       });
     }
   };
@@ -468,27 +477,11 @@ export default function TableWidget({
     
     if (onDataChange) {
       onDataChange({
-        title,
-        rows,
-        columnWidths,
-        rowHeights,
-        headerBgColor,
-        rowBgColor,
-        alternateRowColor,
-        textColor,
-        borderColor,
-        customRowColors,
-        customColumnColors: newCustomColumnColors,
-        customRowTextColors,
-        customColumnTextColors,
-        customRowBold,
-        customColumnBold,
-        customCellColors,
-        customCellTextColors,
-        customCellBold,
-        customRowTextSizes,
-        customColumnTextSizes,
-        customCellTextSizes
+        title, rows, columnWidths, rowHeights, headerBgColor, rowBgColor, alternateRowColor,
+        textColor, borderColor, customRowColors, customColumnColors: newCustomColumnColors,
+        customRowTextColors, customColumnTextColors, customRowBold, customColumnBold,
+        customCellColors, customCellTextColors, customCellBold, customRowTextSizes,
+        customColumnTextSizes, customCellTextSizes
       });
     }
   };
@@ -504,27 +497,11 @@ export default function TableWidget({
     
     if (onDataChange) {
       onDataChange({
-        title,
-        rows,
-        columnWidths,
-        rowHeights,
-        headerBgColor,
-        rowBgColor,
-        alternateRowColor,
-        textColor,
-        borderColor,
-        customRowColors,
-        customColumnColors,
-        customRowTextColors: newCustomRowTextColors,
-        customColumnTextColors,
-        customRowBold,
-        customColumnBold,
-        customCellColors,
-        customCellTextColors,
-        customCellBold,
-        customRowTextSizes,
-        customColumnTextSizes,
-        customCellTextSizes
+        title, rows, columnWidths, rowHeights, headerBgColor, rowBgColor, alternateRowColor,
+        textColor, borderColor, customRowColors, customColumnColors,
+        customRowTextColors: newCustomRowTextColors, customColumnTextColors, customRowBold,
+        customColumnBold, customCellColors, customCellTextColors, customCellBold,
+        customRowTextSizes, customColumnTextSizes, customCellTextSizes
       });
     }
   };
@@ -540,27 +517,11 @@ export default function TableWidget({
     
     if (onDataChange) {
       onDataChange({
-        title,
-        rows,
-        columnWidths,
-        rowHeights,
-        headerBgColor,
-        rowBgColor,
-        alternateRowColor,
-        textColor,
-        borderColor,
-        customRowColors,
-        customColumnColors,
-        customRowTextColors,
-        customColumnTextColors: newCustomColumnTextColors,
-        customRowBold,
-        customColumnBold,
-        customCellColors,
-        customCellTextColors,
-        customCellBold,
-        customRowTextSizes,
-        customColumnTextSizes,
-        customCellTextSizes
+        title, rows, columnWidths, rowHeights, headerBgColor, rowBgColor, alternateRowColor,
+        textColor, borderColor, customRowColors, customColumnColors, customRowTextColors,
+        customColumnTextColors: newCustomColumnTextColors, customRowBold, customColumnBold,
+        customCellColors, customCellTextColors, customCellBold, customRowTextSizes,
+        customColumnTextSizes, customCellTextSizes
       });
     }
   };
@@ -572,27 +533,11 @@ export default function TableWidget({
     
     if (onDataChange) {
       onDataChange({
-        title,
-        rows,
-        columnWidths,
-        rowHeights,
-        headerBgColor,
-        rowBgColor,
-        alternateRowColor,
-        textColor,
-        borderColor,
-        customRowColors,
-        customColumnColors,
-        customRowTextColors,
-        customColumnTextColors,
-        customRowBold: newCustomRowBold,
-        customColumnBold,
-        customCellColors,
-        customCellTextColors,
-        customCellBold,
-        customRowTextSizes,
-        customColumnTextSizes,
-        customCellTextSizes
+        title, rows, columnWidths, rowHeights, headerBgColor, rowBgColor, alternateRowColor,
+        textColor, borderColor, customRowColors, customColumnColors, customRowTextColors,
+        customColumnTextColors, customRowBold: newCustomRowBold, customColumnBold,
+        customCellColors, customCellTextColors, customCellBold, customRowTextSizes,
+        customColumnTextSizes, customCellTextSizes
       });
     }
   };
@@ -604,27 +549,11 @@ export default function TableWidget({
     
     if (onDataChange) {
       onDataChange({
-        title,
-        rows,
-        columnWidths,
-        rowHeights,
-        headerBgColor,
-        rowBgColor,
-        alternateRowColor,
-        textColor,
-        borderColor,
-        customRowColors,
-        customColumnColors,
-        customRowTextColors,
-        customColumnTextColors,
-        customRowBold,
-        customColumnBold: newCustomColumnBold,
-        customCellColors,
-        customCellTextColors,
-        customCellBold,
-        customRowTextSizes,
-        customColumnTextSizes,
-        customCellTextSizes
+        title, rows, columnWidths, rowHeights, headerBgColor, rowBgColor, alternateRowColor,
+        textColor, borderColor, customRowColors, customColumnColors, customRowTextColors,
+        customColumnTextColors, customRowBold, customColumnBold: newCustomColumnBold,
+        customCellColors, customCellTextColors, customCellBold, customRowTextSizes,
+        customColumnTextSizes, customCellTextSizes
       });
     }
   };
@@ -633,11 +562,8 @@ export default function TableWidget({
     if (showEditPanel) return;
     
     const target = e.target as HTMLElement;
-    if (target.closest('input') || 
-        target.closest('button') ||
-        target.closest('.cell-content') ||
-        target.classList.contains('resize-handle') ||
-        target.closest('.resize-handle')) {
+    if (target.closest('input') || target.closest('button') || target.closest('.cell-content') ||
+        target.classList.contains('resize-handle') || target.closest('.resize-handle')) {
       return;
     }
     
@@ -654,11 +580,8 @@ export default function TableWidget({
     if (showEditPanel) return;
     
     const target = e.target as HTMLElement;
-    if (target.closest('input') || 
-        target.closest('button') ||
-        target.closest('.cell-content') ||
-        target.classList.contains('resize-handle') ||
-        target.closest('.resize-handle')) {
+    if (target.closest('input') || target.closest('button') || target.closest('.cell-content') ||
+        target.classList.contains('resize-handle') || target.closest('.resize-handle')) {
       return;
     }
     
@@ -672,86 +595,48 @@ export default function TableWidget({
   };
 
   const colorPresets = [
-    { name: 'Blue', value: '#3b82f6' },
-    { name: 'Purple', value: '#8b5cf6' },
-    { name: 'Green', value: '#10b981' },
-    { name: 'Red', value: '#ef4444' },
-    { name: 'Orange', value: '#f59e0b' },
-    { name: 'Pink', value: '#ec4899' },
-    { name: 'Teal', value: '#14b8a6' },
-    { name: 'Gray', value: '#64748b' },
-    { name: 'Dark', value: 'rgba(0, 0, 0, 0.4)' },
-    { name: 'Light', value: 'rgba(255, 255, 255, 0.1)' },
+    { name: 'Blue', value: '#3b82f6' }, { name: 'Purple', value: '#8b5cf6' },
+    { name: 'Green', value: '#10b981' }, { name: 'Red', value: '#ef4444' },
+    { name: 'Orange', value: '#f59e0b' }, { name: 'Pink', value: '#ec4899' },
+    { name: 'Teal', value: '#14b8a6' }, { name: 'Gray', value: '#64748b' },
+    { name: 'Dark', value: 'rgba(0, 0, 0, 0.4)' }, { name: 'Light', value: 'rgba(255, 255, 255, 0.1)' },
   ];
 
   const getCellBackgroundColor = (rowIndex: number, colIndex: number) => {
     const cellKey = `${rowIndex}-${colIndex}`;
-    if (customCellColors[cellKey]) {
-      return customCellColors[cellKey];
-    }
-    if (customRowColors[rowIndex]) {
-      return customRowColors[rowIndex];
-    }
-    if (customColumnColors[colIndex]) {
-      return customColumnColors[colIndex];
-    }
-    if (rowIndex === 0) {
-      return headerBgColor;
-    }
+    if (customCellColors[cellKey]) return customCellColors[cellKey];
+    if (customRowColors[rowIndex]) return customRowColors[rowIndex];
+    if (customColumnColors[colIndex]) return customColumnColors[colIndex];
+    if (rowIndex === 0) return headerBgColor;
     return rowIndex % 2 === 0 ? alternateRowColor : rowBgColor;
   };
 
   const getCellTextColor = (rowIndex: number, colIndex: number) => {
     const cellKey = `${rowIndex}-${colIndex}`;
-    if (customCellTextColors[cellKey]) {
-      return customCellTextColors[cellKey];
-    }
-    if (customRowTextColors[rowIndex]) {
-      return customRowTextColors[rowIndex];
-    }
-    if (customColumnTextColors[colIndex]) {
-      return customColumnTextColors[colIndex];
-    }
+    if (customCellTextColors[cellKey]) return customCellTextColors[cellKey];
+    if (customRowTextColors[rowIndex]) return customRowTextColors[rowIndex];
+    if (customColumnTextColors[colIndex]) return customColumnTextColors[colIndex];
     return textColor;
   };
 
   const getCellFontWeight = (rowIndex: number, colIndex: number) => {
     const cellKey = `${rowIndex}-${colIndex}`;
-    
-    if (customCellBold[cellKey] !== undefined) {
-      return customCellBold[cellKey] ? '700' : '400';
-    }
-    
+    if (customCellBold[cellKey] !== undefined) return customCellBold[cellKey] ? '700' : '400';
     if (rowIndex === 0) {
-      if (customColumnBold[colIndex] !== undefined) {
-        return customColumnBold[colIndex] ? '700' : '600';
-      }
-      if (customRowBold[rowIndex] !== undefined) {
-        return customRowBold[rowIndex] ? '700' : '400';
-      }
+      if (customColumnBold[colIndex] !== undefined) return customColumnBold[colIndex] ? '700' : '600';
+      if (customRowBold[rowIndex] !== undefined) return customRowBold[rowIndex] ? '700' : '400';
       return '600';
     }
-    
-    if (customRowBold[rowIndex]) {
-      return '700';
-    }
-    if (customColumnBold[colIndex]) {
-      return '700';
-    }
+    if (customRowBold[rowIndex]) return '700';
+    if (customColumnBold[colIndex]) return '700';
     return '400';
   };
 
   const getCellFontSize = (rowIndex: number, colIndex: number) => {
     const cellKey = `${rowIndex}-${colIndex}`;
-    if (customCellTextSizes[cellKey]) {
-      return customCellTextSizes[cellKey];
-    }
-    if (customRowTextSizes[rowIndex]) {
-      return customRowTextSizes[rowIndex];
-    }
-    if (customColumnTextSizes[colIndex]) {
-      return customColumnTextSizes[colIndex];
-    }
+    if (customCellTextSizes[cellKey]) return customCellTextSizes[cellKey];
+    if (customRowTextSizes[rowIndex]) return customRowTextSizes[rowIndex];
+    if (customColumnTextSizes[colIndex]) return customColumnTextSizes[colIndex];
     return 13;
   };
 
@@ -763,14 +648,15 @@ export default function TableWidget({
           isDragging ? 'border-blue-400 shadow-2xl' : 'border-white/20 hover:border-white/30'
         } ${isResizing || isDragging ? 'select-none' : ''}`}
         style={{ 
-          width: `${width}px`,
-          height: `${height}px`,
-          position: 'absolute',
-          left: `${position.x}px`,
-          top: `${position.y}px`,
-          zIndex: isDragging ? 1000 : 1,
+          width: `${width}px`, height: `${height}px`, position: 'absolute',
+          left: `${position.x}px`, top: `${position.y}px`, zIndex: isDragging ? 9999 : zIndex,
           backgroundColor: 'rgba(15, 23, 42, 0.95)',
           transition: isDragging || isResizing ? 'none' : 'all 0.2s',
+        }}
+        onMouseDownCapture={() => {
+          if (onBringToFront) {
+            onBringToFront();
+          }
         }}
       >
         <div 
@@ -780,6 +666,18 @@ export default function TableWidget({
         />
 
         <div className="absolute top-4 right-2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-all duration-200 z-10">
+          <button
+            data-settings-button
+            onClick={() => setShowCreateChart(true)}
+            className="w-8 h-8 rounded-lg bg-green-500/20 hover:bg-green-500/80 text-white transition-all flex items-center justify-center shadow-lg"
+            title="Create Chart"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="18" y1="20" x2="18" y2="10"></line>
+              <line x1="12" y1="20" x2="12" y2="4"></line>
+              <line x1="6" y1="20" x2="6" y2="14"></line>
+            </svg>
+          </button>
           <button
             data-settings-button
             onClick={() => setShowEditPanel(!showEditPanel)}
@@ -843,36 +741,9 @@ export default function TableWidget({
                   <div className="mb-4 p-2.5 bg-slate-800/40 rounded-lg border border-white/5">
                     <label className="text-xs text-gray-400 block mb-2">Apply to:</label>
                     <div className="grid grid-cols-3 gap-1.5">
-                      <button
-                        onClick={() => setHeaderColorMode('cell')}
-                        className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
-                          headerColorMode === 'cell'
-                            ? 'bg-blue-500 text-white shadow-sm'
-                            : 'bg-slate-700/50 text-gray-300 hover:bg-slate-600/50'
-                        }`}
-                      >
-                        Cell
-                      </button>
-                      <button
-                        onClick={() => setHeaderColorMode('row')}
-                        className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
-                          headerColorMode === 'row'
-                            ? 'bg-blue-500 text-white shadow-sm'
-                            : 'bg-slate-700/50 text-gray-300 hover:bg-slate-600/50'
-                        }`}
-                      >
-                        Row
-                      </button>
-                      <button
-                        onClick={() => setHeaderColorMode('column')}
-                        className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
-                          headerColorMode === 'column'
-                            ? 'bg-blue-500 text-white shadow-sm'
-                            : 'bg-slate-700/50 text-gray-300 hover:bg-slate-600/50'
-                        }`}
-                      >
-                        Column
-                      </button>
+                      <button onClick={() => setHeaderColorMode('cell')} className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${headerColorMode === 'cell' ? 'bg-blue-500 text-white shadow-sm' : 'bg-slate-700/50 text-gray-300 hover:bg-slate-600/50'}`}>Cell</button>
+                      <button onClick={() => setHeaderColorMode('row')} className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${headerColorMode === 'row' ? 'bg-blue-500 text-white shadow-sm' : 'bg-slate-700/50 text-gray-300 hover:bg-slate-600/50'}`}>Row</button>
+                      <button onClick={() => setHeaderColorMode('column')} className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${headerColorMode === 'column' ? 'bg-blue-500 text-white shadow-sm' : 'bg-slate-700/50 text-gray-300 hover:bg-slate-600/50'}`}>Column</button>
                     </div>
                   </div>
                   
@@ -1221,8 +1092,7 @@ export default function TableWidget({
                         color: getCellTextColor(0, colIndex),
                         fontWeight: getCellFontWeight(0, colIndex),
                         fontSize: `${getCellFontSize(0, colIndex)}px`,
-                        padding: '12px',
-                        textAlign: 'left',
+                        padding: '12px', textAlign: 'left',
                         borderRight: colIndex < rows[0].length - 1 ? `1px solid ${borderColor}` : 'none',
                         borderBottom: `2px solid ${borderColor}`,
                         width: `${columnWidths[colIndex]}px`,
@@ -1277,22 +1147,15 @@ export default function TableWidget({
                         className={`resize-handle absolute top-0 h-full transition-colors ${
                           resizingColumn === colIndex ? 'bg-blue-400 cursor-col-resize z-50' : 'cursor-col-resize hover:bg-blue-400/50 z-20'
                         }`}
-                        style={{ 
-                          right: '-8px',
-                          width: '16px',
-                          pointerEvents: 'auto'
-                        }}
+                        style={{ right: '-8px', width: '16px', pointerEvents: 'auto' }}
                         title="Drag to resize column"
                       />
                     </th>
                   ))}
                   <th 
                     style={{ 
-                      backgroundColor: headerBgColor,
-                      padding: '12px',
-                      width: '50px',
-                      borderBottom: `2px solid ${borderColor}`,
-                      position: 'relative'
+                      backgroundColor: headerBgColor, padding: '12px', width: '50px',
+                      borderBottom: `2px solid ${borderColor}`, position: 'relative'
                     }}
                   >
                     <button
@@ -1313,13 +1176,11 @@ export default function TableWidget({
                       }`}
                       style={{ 
                         left: `-${columnWidths.reduce((sum, w) => sum + w, 0)}px`,
-                        right: '-50px',
-                        pointerEvents: 'auto'
+                        right: '-50px', pointerEvents: 'auto'
                       }}
                       title="Drag to resize header row"
                     />
                   </th>
-                  
                 </tr>
               </thead>
               <tbody>
@@ -1372,11 +1233,9 @@ export default function TableWidget({
                     <td 
                       style={{ 
                         backgroundColor: getCellBackgroundColor(rowIndex + 1, 0),
-                        padding: '10px 12px',
-                        paddingRight: '8px',
+                        padding: '10px 12px', paddingRight: '8px',
                         borderBottom: `1px solid ${borderColor}`,
-                        position: 'relative',
-                        textAlign: 'right'
+                        position: 'relative', textAlign: 'right'
                       }}
                     >
                       <div className="flex justify-end">
@@ -1399,8 +1258,7 @@ export default function TableWidget({
                         }`}
                         style={{ 
                           left: `-${columnWidths.reduce((sum, w) => sum + w, 0)}px`,
-                          right: '-50px',
-                          pointerEvents: 'auto'
+                          right: '-50px', pointerEvents: 'auto'
                         }}
                         title="Drag to resize row"
                       />
@@ -1410,11 +1268,7 @@ export default function TableWidget({
                 <tr>
                   <td 
                     colSpan={rows[0].length + 1}
-                    style={{ 
-                      padding: '8px',
-                      textAlign: 'center',
-                      borderBottom: `1px solid ${borderColor}`
-                    }}
+                    style={{ padding: '8px', textAlign: 'center', borderBottom: `1px solid ${borderColor}` }}
                   >
                     <button
                       onClick={addRow}
@@ -1445,6 +1299,13 @@ export default function TableWidget({
         {hoveredEdge === 'w' && <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-blue-400/50 rounded-l-xl pointer-events-none" />}
         {hoveredEdge === 'e' && <div className="absolute right-0 top-0 bottom-0 w-0.5 bg-blue-400/50 rounded-r-xl pointer-events-none" />}
       </div>
+
+      <CreateChartModal
+        isOpen={showCreateChart}
+        onClose={() => setShowCreateChart(false)}
+        tableData={rows}
+        onCreateChart={handleCreateChart}
+      />
     </>
   );
 }
