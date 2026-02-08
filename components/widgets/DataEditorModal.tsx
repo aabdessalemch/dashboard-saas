@@ -9,6 +9,7 @@ interface DataEditorModalProps {
   currentData: any[];
   currentColors: string[];
   onSave: (data: any[], colors: string[]) => void;
+  singleColor?: boolean; // ✅ ADDED THIS
 }
 
 export default function DataEditorModal({
@@ -16,7 +17,8 @@ export default function DataEditorModal({
   onClose,
   currentData,
   currentColors,
-  onSave
+  onSave,
+  singleColor = false // ✅ ADDED THIS
 }: DataEditorModalProps) {
   const [data, setData] = useState(currentData);
   const [colors, setColors] = useState(currentColors);
@@ -61,14 +63,14 @@ export default function DataEditorModal({
       newRow[key] = typeof data[0][key] === 'number' ? 100 : 'New Item';
     });
     setData([...data, newRow]);
-    if (currentColors.length > 1) {
+    if (!singleColor && currentColors.length > 1) { // ✅ CHANGED THIS
       setColors([...colors, '#3b82f6']);
     }
   };
 
   const deleteRow = (index: number) => {
     setData(data.filter((_, i) => i !== index));
-    if (currentColors.length > 1) {
+    if (!singleColor && currentColors.length > 1) { // ✅ CHANGED THIS
       setColors(colors.filter((_, i) => i !== index));
     }
   };
@@ -81,7 +83,7 @@ export default function DataEditorModal({
   if (!isOpen || !mounted) return null;
 
   const dataKeys = Object.keys(data[0] || {}).filter(key => key !== 'comment');
-  const isSingleColor = currentColors.length === 1;
+  const isSingleColor = singleColor || currentColors.length === 1; // ✅ CHANGED THIS
 
   const modalContent = (
     <div style={{ position: 'relative', zIndex: 10000 }}>
