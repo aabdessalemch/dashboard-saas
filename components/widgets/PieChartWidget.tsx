@@ -7,7 +7,7 @@ import DataEditorModal from "./DataEditorModal";
 import ChartSettingsModal from "./ChartSettingsModal";
 
 interface PieChartWidgetProps {
-  onDelete: () => void;
+  onDelete?: () => void;
   onDuplicate?: () => void;
   onPositionChange?: (x: number, y: number) => void;
   onSizeChange?: (width: number, height: number) => void;
@@ -20,6 +20,7 @@ interface PieChartWidgetProps {
   initialZIndex?: number;
   maxWidth?: number;
   initialData?: any;
+  isReadOnly?: boolean;
 }
 
 export default function PieChartWidget({ 
@@ -35,7 +36,8 @@ export default function PieChartWidget({
   initialHeight = 280,
   initialZIndex = 1,
   maxWidth = 1200,
-  initialData
+  initialData,
+  isReadOnly = false
 }: PieChartWidgetProps) {
   const [title, setTitle] = useState(initialData?.title || "Pie Chart");
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -110,6 +112,8 @@ export default function PieChartWidget({
   };
 
   const startDrag = (e: React.MouseEvent) => {
+    if (isReadOnly) return;
+    
     if ((e.target as HTMLElement)?.closest('button') || 
         (e.target as HTMLElement)?.closest('input')) {
       return;
@@ -147,6 +151,8 @@ export default function PieChartWidget({
   };
 
   const startResize = (direction: string) => (e: React.MouseEvent) => {
+    if (isReadOnly) return;
+    
     e.preventDefault();
     e.stopPropagation();
 
@@ -253,8 +259,9 @@ export default function PieChartWidget({
             onEditTitle={() => setIsEditingTitle(true)}
             onEditData={handleOpenDataEditor}
             onSettings={() => setShowSettings(true)}
+            isReadOnly={isReadOnly}
           />
-          {onDuplicate && (
+          {onDuplicate && !isReadOnly && (
             <button
               onClick={handleDuplicate}
               className="w-8 h-8 rounded-lg bg-blue-500/20 hover:bg-blue-500 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
@@ -266,16 +273,18 @@ export default function PieChartWidget({
               </svg>
             </button>
           )}
-          <button
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onDelete();
-            }}
-            className="w-8 h-8 rounded-lg bg-red-500/20 hover:bg-red-500 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
-          >
-            <X size={16} />
-          </button>
+          {onDelete && !isReadOnly && (
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onDelete();
+              }}
+              className="w-8 h-8 rounded-lg bg-red-500/20 hover:bg-red-500 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
+            >
+              <X size={16} />
+            </button>
+          )}
         </div>
 
         <div 
@@ -365,6 +374,7 @@ export default function PieChartWidget({
         currentData={data}
         currentColors={colors}
         onSave={handleSaveData}
+        isReadOnly={isReadOnly}
       />
 
       <ChartSettingsModal
@@ -372,6 +382,7 @@ export default function PieChartWidget({
         onClose={() => setShowSettings(false)}
         settings={settings}
         onSave={setSettings}
+        isReadOnly={isReadOnly}
       />
     </>
   );

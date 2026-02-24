@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from "react";
 import { X, TrendingUp, TrendingDown, Minus, Settings } from "lucide-react";
 
 interface KPIWidgetProps {
-  onDelete: () => void;
+  onDelete?: () => void;
   onDuplicate?: () => void;
   onPositionChange?: (x: number, y: number) => void;
   onSizeChange?: (width: number, height: number) => void;
@@ -16,6 +16,7 @@ interface KPIWidgetProps {
   initialZIndex?: number;
   maxWidth?: number;
   initialData?: any;
+  isReadOnly?: boolean;
 }
 
 export default function KPIWidget({ 
@@ -31,7 +32,8 @@ export default function KPIWidget({
   initialHeight = 180,
   initialZIndex = 1,
   maxWidth = 1200,
-  initialData
+  initialData,
+  isReadOnly = false
 }: KPIWidgetProps) {
   const [title, setTitle] = useState(initialData?.title || "KPI Metric");
   const [value, setValue] = useState(initialData?.value || "1,234");
@@ -130,7 +132,7 @@ useEffect(() => {
   };
 
   const startDrag = (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement)?.closest('button') || 
+    if (isReadOnly || (e.target as HTMLElement)?.closest('button') || 
         (e.target as HTMLElement)?.closest('input') ||
         (e.target as HTMLElement)?.closest('.settings-panel')) {
       return;
@@ -163,6 +165,8 @@ useEffect(() => {
   };
 
   const startResize = (direction: string) => (e: React.MouseEvent) => {
+    if (isReadOnly) return;
+    
     e.preventDefault();
     e.stopPropagation();
 
@@ -243,18 +247,20 @@ useEffect(() => {
         />
 
         <div className="absolute top-4 right-4 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all duration-300 z-10">
-          <button
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setShowSettings(!showSettings);
-            }}
-            className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
-            title="Settings"
-          >
-            <Settings size={16} />
-          </button>
-          {onDuplicate && (
+          {!isReadOnly && (
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setShowSettings(!showSettings);
+              }}
+              className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
+              title="Settings"
+            >
+              <Settings size={16} />
+            </button>
+          )}
+          {onDuplicate && !isReadOnly && (
             <button
               onClick={(e) => {
                 e.preventDefault();
@@ -270,21 +276,23 @@ useEffect(() => {
               </svg>
             </button>
           )}
-          <button
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onDelete();
-            }}
-            className="w-8 h-8 rounded-lg bg-red-500/20 hover:bg-red-500 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
-          >
-            <X size={16} />
-          </button>
+          {onDelete && !isReadOnly && (
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onDelete();
+              }}
+              className="w-8 h-8 rounded-lg bg-red-500/20 hover:bg-red-500 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
+            >
+              <X size={16} />
+            </button>
+          )}
         </div>
 
         <div className="h-full flex flex-col justify-between">
           <div>
-            {isEditingTitle ? (
+            {isEditingTitle && !isReadOnly ? (
               <input
                 type="text"
                 value={title}
@@ -304,8 +312,8 @@ useEffect(() => {
               />
             ) : (
               <p 
-                onDoubleClick={() => setIsEditingTitle(true)}
-                className="text-white/70 text-sm font-medium cursor-text hover:text-blue-400 transition-colors"
+                onDoubleClick={() => !isReadOnly && setIsEditingTitle(true)}
+                className={`text-white/70 text-sm font-medium ${!isReadOnly ? 'cursor-text hover:text-blue-400' : 'cursor-default'} transition-colors`}
               >
                 {title}
               </p>

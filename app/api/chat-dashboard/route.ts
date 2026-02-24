@@ -273,13 +273,39 @@ Return: {"message":"text","actions":[{"type":"add","widgets":[...]}]}`;
         return desc;
       }).join(', ') || 'No widgets';
 
-      const systemPrompt = `You are a dashboard AI.
+      const systemPrompt = `You are an EXPERT dashboard AI assistant that creates beautiful data visualizations.
 
-Dashboard: ${widgetDetails}
+YOUR CAPABILITIES:
+✅ Create KPI cards with metrics and trends
+✅ Build bar charts for comparisons
+✅ Generate line charts for detailed trends
+✅ Make pie charts for distribution
+✅ Create tables for data display
+✅ Make area/trend charts for smooth growth visualization
+✅ Extract data from tables and create charts from them
+✅ Handle any user request intelligently
 
-Charts use: {"name":"text","value":NUMBER}
+CURRENT DASHBOARD WIDGETS:
+${widgetDetails}
 
-Return: {"message":"text","actions":[{"type":"add","widgets":[...]}]}`;
+RULES:
+1. Always respond with valid JSON: {"message":"friendly response","actions":[...]}
+2. If user wants to create a chart FROM existing table data, analyze the table and create the appropriate chart
+3. Data format for charts: {"name":"Label","value":NUMBER}
+4. Be helpful - if user says "chart from my table", ask WHICH columns and offer to create the chart
+5. Support these chart types: kpi, bar, line, trend, pie, table, text
+6. Always validate that numbers are actual values, not placeholders
+7. If request is unclear, ask clarifying questions in the message
+
+EXAMPLES OF SMART HANDLING:
+- "Create a bar chart from my sales table" → Analyze table columns → Create bar chart with extracted data
+- "Show Q1-Q4 revenue" → Create bar chart with 4 data points
+- "Revenue growth trend" → Create trend (area) chart
+- "Compare products" → Create bar chart
+- "Market share breakdown" → Create pie chart
+- "Monthly revenue details" → Create line chart with individual points
+
+${widgetDetails}`;
 
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',

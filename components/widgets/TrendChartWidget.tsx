@@ -7,7 +7,7 @@ import DataEditorModal from "./DataEditorModal";
 import ChartSettingsModal from "./ChartSettingsModal";
 
 interface TrendChartWidgetProps {
-  onDelete: () => void;
+  onDelete?: () => void;
   onDuplicate?: () => void;
   onPositionChange?: (x: number, y: number) => void;
   onSizeChange?: (width: number, height: number) => void;
@@ -20,6 +20,7 @@ interface TrendChartWidgetProps {
   initialZIndex?: number;
   maxWidth?: number;
   initialData?: any;
+  isReadOnly?: boolean;
 }
 
 export default function TrendChartWidget({ 
@@ -35,7 +36,8 @@ export default function TrendChartWidget({
   initialHeight = 280,
   initialZIndex = 1,
   maxWidth = 1200,
-  initialData
+  initialData,
+  isReadOnly = false
 }: TrendChartWidgetProps) {
   const [title, setTitle] = useState(initialData?.title || "Trend Chart");
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -140,7 +142,7 @@ export default function TrendChartWidget({
         setSettings(initialData.settings);
       }
     }
-  }, [initialData]);
+  }, []);
 
   useEffect(() => {
     setZIndex(initialZIndex);
@@ -184,6 +186,8 @@ export default function TrendChartWidget({
   };
 
   const startDrag = (e: React.MouseEvent) => {
+    if (isReadOnly) return;
+    
     if ((e.target as HTMLElement)?.closest('button') || 
         (e.target as HTMLElement)?.closest('input')) {
       return;
@@ -221,6 +225,8 @@ export default function TrendChartWidget({
   };
 
   const startResize = (direction: string) => (e: React.MouseEvent) => {
+    if (isReadOnly) return;
+    
     e.preventDefault();
     e.stopPropagation();
 
@@ -311,8 +317,9 @@ export default function TrendChartWidget({
             onEditTitle={() => setIsEditingTitle(true)}
             onEditData={() => setShowDataEditor(true)}
             onSettings={() => setShowSettings(true)}
+            isReadOnly={isReadOnly}
           />
-          {onDuplicate && (
+          {onDuplicate && !isReadOnly && (
             <button
               onClick={onDuplicate}
               className="w-8 h-8 rounded-lg bg-blue-500/20 hover:bg-blue-500 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
@@ -324,12 +331,14 @@ export default function TrendChartWidget({
               </svg>
             </button>
           )}
-          <button
-            onClick={onDelete}
-            className="w-8 h-8 rounded-lg bg-red-500/20 hover:bg-red-500 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
-          >
-            <X size={16} />
-          </button>
+          {onDelete && !isReadOnly && (
+            <button
+              onClick={onDelete}
+              className="w-8 h-8 rounded-lg bg-red-500/20 hover:bg-red-500 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
+            >
+              <X size={16} />
+            </button>
+          )}
         </div>
 
         <div 
@@ -418,6 +427,7 @@ export default function TrendChartWidget({
         currentColors={colors}
         onSave={handleSaveData}
         singleColor={true}
+        isReadOnly={isReadOnly}
       />
 
       <ChartSettingsModal
@@ -425,6 +435,7 @@ export default function TrendChartWidget({
         onClose={() => setShowSettings(false)}
         settings={settings}
         onSave={setSettings}
+        isReadOnly={isReadOnly}
       />
     </>
   );

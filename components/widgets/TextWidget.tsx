@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from "react";
 import { X } from "lucide-react";
 
 interface TextWidgetProps {
-  onDelete: () => void;
+  onDelete?: () => void;
   onDuplicate?: () => void;
   onPositionChange?: (x: number, y: number) => void;
   onSizeChange?: (width: number, height: number) => void;
@@ -16,6 +16,7 @@ interface TextWidgetProps {
   initialZIndex?: number;
   maxWidth?: number;
   initialData?: any;
+  isReadOnly?: boolean;
 }
 
 export default function TextWidget({ 
@@ -30,7 +31,8 @@ export default function TextWidget({
   initialWidth = 400,
   initialZIndex = 1,
   maxWidth = 1200,
-  initialData
+  initialData,
+  isReadOnly = false
 }: TextWidgetProps) {
   const [isFocused, setIsFocused] = useState(false);
   const [showToolbar, setShowToolbar] = useState(false);
@@ -262,7 +264,7 @@ export default function TextWidget({
   };
 
   const startDrag = (e: React.MouseEvent) => {
-    if (isFocused) {
+    if (isReadOnly || isFocused) {
       return;
     }
     
@@ -303,6 +305,8 @@ export default function TextWidget({
   };
 
   const startResize = (e: React.MouseEvent) => {
+    if (isReadOnly) return;
+    
     e.preventDefault();
     e.stopPropagation();
     
@@ -489,7 +493,7 @@ export default function TextWidget({
       )}
 
       <div className="absolute -top-2 -right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-all duration-200">
-        {onDuplicate && (
+        {onDuplicate && !isReadOnly && (
           <button 
             onClick={(e) => { 
               e.stopPropagation(); 
@@ -504,23 +508,27 @@ export default function TextWidget({
             </svg>
           </button>
         )}
-        <button 
-          onClick={(e) => { 
-            e.stopPropagation(); 
-            onDelete(); 
-          }} 
-          className="w-7 h-7 bg-red-500 hover:bg-red-600 hover:scale-110 text-white rounded-full shadow-lg flex items-center justify-center transition-all"
-        >
-          <X size={14} />
-        </button>
+        {onDelete && !isReadOnly && (
+          <button 
+            onClick={(e) => { 
+              e.stopPropagation(); 
+              onDelete(); 
+            }} 
+            className="w-7 h-7 bg-red-500 hover:bg-red-600 hover:scale-110 text-white rounded-full shadow-lg flex items-center justify-center transition-all"
+          >
+            <X size={14} />
+          </button>
+        )}
       </div>
 
       <div
         ref={editorRef}
-        contentEditable
+        contentEditable={!isReadOnly}
         onClick={(e) => {
           e.stopPropagation();
-          handleEditorClick();
+          if (!isReadOnly) {
+            handleEditorClick();
+          }
         }}
         onMouseDown={(e) => {
           if (isFocused) {
@@ -539,11 +547,13 @@ export default function TextWidget({
         }}
         onDoubleClick={(e) => {
           e.stopPropagation();
-          handleEditorClick();
+          if (!isReadOnly) {
+            handleEditorClick();
+          }
         }}
         onInput={saveContent}
         onBlur={saveContent}
-        className={`min-h-[50px] p-3 pt-5 text-white outline-none ${isFocused ? 'cursor-text' : 'cursor-move'}`}
+        className={`min-h-[50px] p-3 pt-5 text-white outline-none ${isFocused && !isReadOnly ? 'cursor-text' : 'cursor-move'} ${isReadOnly ? 'opacity-75 select-none' : ''}`}
         suppressContentEditableWarning
       />
 

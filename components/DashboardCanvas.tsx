@@ -18,6 +18,7 @@ interface DashboardCanvasProps {
   onUpdateSize: (id: string, width: number, height: number) => void;
   onUpdateData: (id: string, data: any) => void;
   onBringToFront?: (id: string) => void;
+  permission?: 'owner' | 'editor' | 'viewer';
 }
 
 export default function DashboardCanvas({ 
@@ -28,7 +29,8 @@ export default function DashboardCanvas({
   onUpdatePosition,
   onUpdateSize,
   onUpdateData,
-  onBringToFront
+  onBringToFront,
+  permission = 'owner'
 }: DashboardCanvasProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const [canvasWidth, setCanvasWidth] = useState(0);
@@ -47,12 +49,12 @@ export default function DashboardCanvas({
 
   const renderWidget = (widget: WidgetPosition) => {
     const commonProps = {
-      onDelete: () => onDeleteWidget(widget.id),
-      onDuplicate: () => onDuplicateWidget(widget.id),
-      onPositionChange: (x: number, y: number) => onUpdatePosition(widget.id, x, y),
-      onSizeChange: (width: number, height: number) => onUpdateSize(widget.id, width, height),
-      onDataChange: (data: any) => onUpdateData(widget.id, data),
-      onBringToFront: onBringToFront ? () => onBringToFront(widget.id) : undefined,
+      onDelete: permission !== 'viewer' ? () => onDeleteWidget(widget.id) : undefined,
+      onDuplicate: permission !== 'viewer' ? () => onDuplicateWidget(widget.id) : undefined,
+      onPositionChange: permission !== 'viewer' ? (x: number, y: number) => onUpdatePosition(widget.id, x, y) : undefined,
+      onSizeChange: permission !== 'viewer' ? (width: number, height: number) => onUpdateSize(widget.id, width, height) : undefined,
+      onDataChange: permission !== 'viewer' ? (data: any) => onUpdateData(widget.id, data) : undefined,
+      onBringToFront: permission !== 'viewer' && onBringToFront ? () => onBringToFront(widget.id) : undefined,
       initialX: widget.x,
       initialY: widget.y,
       initialWidth: widget.width,
@@ -60,23 +62,27 @@ export default function DashboardCanvas({
       initialZIndex: widget.zIndex || 1,
       initialData: widget.data,
       maxWidth: canvasWidth - 40,
+      isReadOnly: permission === 'viewer',
     };
+
+    // Use _stableId as a consistent key that never changes during widget's lifetime
+    const stableKey = widget._stableId || widget.id;
 
     switch (widget.type) {
       case "line":
-        return <LineChartWidget key={widget.id} {...commonProps} />;
+        return <LineChartWidget key={stableKey} {...commonProps} />;
       case "bar":
-        return <BarChartWidget key={widget.id} {...commonProps} />;
+        return <BarChartWidget key={stableKey} {...commonProps} />;
       case "pie":
-        return <PieChartWidget key={widget.id} {...commonProps} />;
+        return <PieChartWidget key={stableKey} {...commonProps} />;
       case "trend":
-        return <TrendChartWidget key={widget.id} {...commonProps} />;
+        return <TrendChartWidget key={stableKey} {...commonProps} />;
       case "text":
-        return <TextWidget key={widget.id} {...commonProps} />;
+        return <TextWidget key={stableKey} {...commonProps} />;
       case "kpi":
-        return <KPIWidget key={widget.id} {...commonProps} />;
+        return <KPIWidget key={stableKey} {...commonProps} />;
       case "table":
-        return <TableWidget key={widget.id} {...commonProps} />;
+        return <TableWidget key={stableKey} {...commonProps} />;
       default:
         return null;
     }

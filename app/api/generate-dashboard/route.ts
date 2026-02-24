@@ -7,7 +7,8 @@ export async function POST(request: NextRequest) {
     const apiKey = process.env.GEMINI_API_KEY;
     
     if (!apiKey) {
-      return NextResponse.json({ error: 'No API key' }, { status: 500 });
+      console.error('❌ Missing GEMINI_API_KEY');
+      return NextResponse.json({ error: 'API key not configured. Please add GEMINI_API_KEY to your .env file.' }, { status: 500 });
     }
 
     // List models
@@ -15,7 +16,9 @@ export async function POST(request: NextRequest) {
     const listResponse = await fetch(listUrl);
     
     if (!listResponse.ok) {
-      return NextResponse.json({ error: 'Failed to list models' }, { status: 500 });
+      const errorText = await listResponse.text();
+      console.error('❌ Failed to list models:', errorText);
+      return NextResponse.json({ error: 'Failed to connect to AI service. Please check your API key.' }, { status: 500 });
     }
 
     const modelsList = await listResponse.json();
@@ -24,8 +27,11 @@ export async function POST(request: NextRequest) {
     );
 
     if (!availableModel) {
-      return NextResponse.json({ error: 'No models available' }, { status: 500 });
+      console.error('❌ No compatible models found');
+      return NextResponse.json({ error: 'No AI models available. Please contact support.' }, { status: 500 });
     }
+
+    console.log('✅ Using model:', availableModel.name);
 
     // Parse request
     const { messages, image } = await request.json();
@@ -33,53 +39,62 @@ export async function POST(request: NextRequest) {
 
     console.log('💬 USER REQUEST:', userRequest);
 
-    // UPDATED PROMPT WITH CHART SUPPORT
-    let promptText = `STRICT INSTRUCTIONS - READ CAREFULLY:
+    // UPDATED PROMPT WITH ADVANCED FEATURES
+    let promptText = `STRICT INSTRUCTIONS - YOU ARE AN EXPERT DASHBOARD GENERATOR:
 
-You MUST extract the EXACT numbers and values from the user's request below.
+You MUST extract EXACT numbers and values from the user's request.
 DO NOT use example data. DO NOT use placeholder data.
-If user says "$250K" you MUST use "250" as the value.
-If user says "up 15%" you MUST use "15" as trendValue and "up" as trend.
+If user says "$250K" → value must be "250", unit: "K"
+If user says "up 15%" → trend: "up", trendValue: "15"
+If user mentions "table", "data", "rows", "columns" → ask them to specify what chart type they want
 
-Return ONLY a valid JSON array. NO other text. NO markdown. NO backticks.
+HANDLE THESE COMMON REQUESTS:
+• "Create a KPI showing [metric] [value]" → KPI widget
+• "Chart comparing [items]" → BAR chart with items as data points
+• "Trend of [metric] over [period]" → TREND chart with time-based data
+• "Show distribution of [categories]" → PIE chart
+• "Line chart of [data]" → LINE chart with points
+• "Table of [data]" → TABLE widget
+• "Create charts from my table data" → Ask user to specify: "Create a bar chart from my sales table showing Q1-Q4"
 
 AVAILABLE WIDGET TYPES:
 
-1. KPI Card (for single metrics like revenue, users, costs):
+1. KPI Card (single metrics):
 {"type":"kpi","data":{"title":"Revenue","value":"250","unit":"K","trend":"up","trendValue":"15"}}
 
-2. Bar Chart (for comparing multiple items):
-{"type":"bar","data":{"title":"Sales by Product","data":[{"name":"Product A","value":400},{"name":"Product B","value":300},{"name":"Product C","value":600}],"colors":["#8b5cf6","#a855f7","#9333ea"]}}
+2. Bar Chart (comparing items, categories, quarters):
+{"type":"bar","data":{"title":"Sales by Region","data":[{"name":"North","value":400},{"name":"South","value":300},{"name":"East","value":600},{"name":"West","value":500}],"colors":["#8b5cf6","#a855f7","#9333ea","#7c3aed"]}}
 
-3. Line Chart (for trends over time with points):
-{"type":"line","data":{"title":"Revenue Trend","data":[{"name":"Jan","value":400},{"name":"Feb","value":300},{"name":"Mar","value":600}],"colors":["#3b82f6"]}}
+3. Line Chart (individual points, detail view):
+{"type":"line","data":{"title":"Monthly Revenue","data":[{"name":"Jan","value":400},{"name":"Feb","value":500},{"name":"Mar","value":600},{"name":"Apr","value":700}],"colors":["#3b82f6"]}}
 
-4. Trend Chart / Area Chart (for smooth trends with filled area):
-{"type":"trend","data":{"title":"Growth Trend","data":[{"name":"Week 1","value":400},{"name":"Week 2","value":600},{"name":"Week 3","value":800}],"colors":["#f59e0b"]}}
+4. Trend Chart (smooth area, growth visualization):
+{"type":"trend","data":{"title":"Growth Trend","data":[{"name":"Week 1","value":400},{"name":"Week 2","value":600},{"name":"Week 3","value":800},{"name":"Week 4","value":950}],"colors":["#f59e0b"]}}
 
-5. Pie Chart (for proportions/percentages):
-{"type":"pie","data":{"title":"Market Share","data":[{"name":"Category A","value":400},{"name":"Category B","value":300},{"name":"Category C","value":300}],"colors":["#8b5cf6","#3b82f6","#10b981"]}}
+5. Pie Chart (proportions, percentages, market share):
+{"type":"pie","data":{"title":"Market Share","data":[{"name":"Product A","value":40},{"name":"Product B","value":30},{"name":"Product C","value":20},{"name":"Product D","value":10}],"colors":["#8b5cf6","#3b82f6","#10b981","#f59e0b"]}}
 
-6. Table (for tabular data):
-{"type":"table","data":{"title":"Sales Data","rows":[[{"value":"Product"},{"value":"Q1"}],[{"value":"Widget A"},{"value":"120"}]]}}
+6. Table (structured data with rows and columns):
+{"type":"table","data":{"title":"Q1 Sales Data","rows":[[{"value":"Product"},{"value":"Revenue"},{"value":"Growth"}],[{"value":"Widget A"},{"value":"$120K"},{"value":"+15%"}],[{"value":"Widget B"},{"value":"$95K"},{"value":"+10%"}]]}}
 
-7. Text Box (for titles/labels):
-{"type":"text","data":{"content":"<span style='color: white; font-size: 18px; font-weight: bold'>Dashboard Title</span>"}}
+7. Text Box (titles, descriptions, labels):
+{"type":"text","data":{"content":"<div style='color: white; font-size: 20px; font-weight: bold; line-height: 1.5'>Your Dashboard Title Here</div>"}}
 
-RULES FOR CHOOSING WIDGET TYPE:
-- If user says "KPI" or "card" or mentions a SINGLE metric → use KPI
-- If user says "bar chart" or "compare" or "comparison" → use BAR chart
-- If user says "line chart" or wants to see individual points → use LINE chart
-- If user says "trend chart" or "area chart" or "smooth trend" → use TREND chart
-- If user says "pie chart" or "distribution" or "percentage" → use PIE chart
-- If user says "table" or has rows/columns data → use TABLE
-- Extract ALL exact numbers from user's request
-- For charts, create at least 3-5 data points unless user specifies otherwise
-- Use appropriate colors: purple for bars, blue for lines, orange for trends, varied for pie
+CRITICAL RULES:
+- ALWAYS use exact numbers from user request
+- Create 3-5+ data points for charts (don't just create 1-2)
+- For time-based data (monthly, quarterly): use TREND chart
+- For comparing different items/categories: use BAR chart
+- For showing a single metric: use KPI
+- For distribution/percentages: use PIE chart
+- For detailed point-by-point data: use LINE chart
+- Match colors to widget type (purple for bars, blue for lines, orange for trends)
+- If user mentions table data, ask them to be specific about which chart type they want
+- Return ONLY valid JSON array, nothing else
 
 USER REQUEST: "${userRequest}"
 
-Analyze the request above and return the appropriate widget(s) as a JSON array:`;
+Analyze and respond with appropriate widget(s) as JSON array ONLY:`;
 
     const parts: any[] = [{ text: promptText }];
 
@@ -99,6 +114,8 @@ Analyze the request above and return the appropriate widget(s) as a JSON array:`
     // Call API
     const generateUrl = `https://generativelanguage.googleapis.com/v1/${availableModel.name}:generateContent?key=${apiKey}`;
     
+    console.log('📡 Calling Gemini API...');
+    
     const response = await fetch(generateUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -106,22 +123,41 @@ Analyze the request above and return the appropriate widget(s) as a JSON array:`
         contents: [{ parts }],
         generationConfig: {
           temperature: 0.2,
-          maxOutputTokens: 50000,  // ✅ INCREASED FROM 2048!
+          maxOutputTokens: 50000,
         }
       })
     });
 
     if (!response.ok) {
       const error = await response.text();
-      return NextResponse.json({ error: 'API failed', details: error }, { status: 500 });
+      console.error('❌ Gemini API error:', error);
+      return NextResponse.json({ 
+        error: 'AI service returned an error. Please try again or simplify your request.',
+        details: error.substring(0, 200)
+      }, { status: 500 });
     }
 
     const data = await response.json();
+    
+    if (!data.candidates || data.candidates.length === 0) {
+      console.error('❌ No candidates in response');
+      return NextResponse.json({ 
+        error: 'AI service returned empty response. Try a different request or simplify your question.',
+      }, { status: 500 });
+    }
+    
     let text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
     
+    if (!text) {
+      console.error('❌ Empty text in response');
+      return NextResponse.json({ 
+        error: 'AI service returned no content. Try rephrasing your request or simplify it.',
+      }, { status: 500 });
+    }
+    
     console.log('🤖 RAW AI RESPONSE:');
-    console.log(text);
-    console.log('--- END RESPONSE ---');
+    console.log(text.substring(0, 500));
+    console.log('--- END SNIPPET ---');
     
     // Clean response
     text = text.trim();
@@ -130,9 +166,15 @@ Analyze the request above and return the appropriate widget(s) as a JSON array:`
     const arrayStart = text.indexOf('[');
     const arrayEnd = text.lastIndexOf(']');
     
-    if (arrayStart !== -1 && arrayEnd !== -1) {
-      text = text.substring(arrayStart, arrayEnd + 1);
+    if (arrayStart === -1 || arrayEnd === -1) {
+      console.error('❌ No JSON array found in response');
+      return NextResponse.json({ 
+        error: 'AI response format invalid. Try a more specific request like: "Create a bar chart with Q1: 100, Q2: 150, Q3: 200"',
+        rawResponse: text.substring(0, 200)
+      }, { status: 500 });
     }
+    
+    text = text.substring(arrayStart, arrayEnd + 1);
     
     console.log('🧹 CLEANED RESPONSE:');
     console.log(text);
@@ -140,31 +182,37 @@ Analyze the request above and return the appropriate widget(s) as a JSON array:`
     // Validate
     try {
       const widgets = JSON.parse(text);
-      console.log('✅ PARSED WIDGETS:', JSON.stringify(widgets, null, 2));
+      console.log('✅ PARSED', widgets.length, 'WIDGETS');
       
-      const hasUserData = JSON.stringify(widgets).includes(
-        userRequest.match(/\d+/)?.[0] || "unlikely_match"
-      );
-      
-      if (!hasUserData && !image) {
-        console.warn('⚠️ WARNING: Response might not contain user data!');
+      if (!Array.isArray(widgets) || widgets.length === 0) {
+        throw new Error('No widgets in array');
       }
       
-    } catch (e) {
-      console.error('❌ PARSE ERROR:', e);
-      console.error('❌ Response may be incomplete - try a simpler request');
+      // Validate widget structure
+      for (const widget of widgets) {
+        if (!widget.type || !widget.data) {
+          throw new Error('Invalid widget structure');
+        }
+      }
       
-      // Return error to frontend with helpful message
+      console.log('✅ All widgets valid');
+      
+    } catch (e: any) {
+      console.error('❌ PARSE ERROR:', e.message);
+      console.error('❌ Failed text:', text.substring(0, 200));
+      
       return NextResponse.json({ 
-        error: 'AI response was incomplete or invalid. Try: fewer data points, simpler request, or use "Edit Data" after creation.',
-        rawResponse: text.substring(0, 200) + '...'
+        error: `Failed to parse AI response: ${e.message}. Try: "Create a KPI card showing revenue $100K"`,
+        rawResponse: text.substring(0, 200)
       }, { status: 500 });
     }
     
     return NextResponse.json({ content: [{ text }] });
 
   } catch (error: any) {
-    console.error('❌ Error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error('❌ Unexpected error:', error);
+    return NextResponse.json({ 
+      error: `Unexpected error: ${error.message}. Please try again.`
+    }, { status: 500 });
   }
 }

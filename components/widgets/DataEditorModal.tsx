@@ -10,6 +10,7 @@ interface DataEditorModalProps {
   currentColors: string[];
   onSave: (data: any[], colors: string[]) => void;
   singleColor?: boolean; // ✅ ADDED THIS
+  isReadOnly?: boolean;
 }
 
 export default function DataEditorModal({
@@ -18,7 +19,8 @@ export default function DataEditorModal({
   currentData,
   currentColors,
   onSave,
-  singleColor = false // ✅ ADDED THIS
+  singleColor = false, // ✅ ADDED THIS
+  isReadOnly = false
 }: DataEditorModalProps) {
   const [data, setData] = useState(currentData);
   const [colors, setColors] = useState(currentColors);
@@ -29,9 +31,12 @@ export default function DataEditorModal({
   }, []);
 
   useEffect(() => {
-    setData(currentData);
-    setColors(currentColors);
-  }, [currentData, currentColors, isOpen]);
+    // Only sync data when the modal opens
+    if (isOpen) {
+      setData(currentData);
+      setColors(currentColors);
+    }
+  }, [isOpen]);
 
   useEffect(() => {
     if (isOpen) {
@@ -80,7 +85,7 @@ export default function DataEditorModal({
     onClose();
   };
 
-  if (!isOpen || !mounted) return null;
+  if (!isOpen || !mounted || isReadOnly) return null;
 
   const dataKeys = Object.keys(data[0] || {}).filter(key => key !== 'comment');
   const isSingleColor = singleColor || currentColors.length === 1; // ✅ CHANGED THIS

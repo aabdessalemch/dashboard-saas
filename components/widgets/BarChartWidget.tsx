@@ -7,7 +7,7 @@ import DataEditorModal from "./DataEditorModal";
 import ChartSettingsModal from "./ChartSettingsModal";
 
 interface BarChartWidgetProps {
-  onDelete: () => void;
+  onDelete?: () => void;
   onDuplicate?: () => void;
   onPositionChange?: (x: number, y: number) => void;
   onSizeChange?: (width: number, height: number) => void;
@@ -20,6 +20,7 @@ interface BarChartWidgetProps {
   initialZIndex?: number;
   maxWidth?: number;
   initialData?: any;
+  isReadOnly?: boolean;
 }
 
 export default function BarChartWidget({ 
@@ -35,7 +36,8 @@ export default function BarChartWidget({
   initialHeight = 280,
   initialZIndex = 1,
   maxWidth = 1200,
-  initialData
+  initialData,
+  isReadOnly = false
 }: BarChartWidgetProps) {
   const [title, setTitle] = useState(initialData?.title || "Bar Chart");
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -131,6 +133,8 @@ export default function BarChartWidget({
   };
 
   const startDrag = (e: React.MouseEvent) => {
+    if (isReadOnly) return;
+    
     if ((e.target as HTMLElement)?.closest('button') || 
         (e.target as HTMLElement)?.closest('input')) {
       return;
@@ -169,6 +173,8 @@ export default function BarChartWidget({
   };
 
   const startResize = (direction: string) => (e: React.MouseEvent) => {
+    if (isReadOnly) return;
+    
     e.preventDefault();
     e.stopPropagation();
 
@@ -339,8 +345,9 @@ const yAxisMax = Math.ceil(maxValue * 1.2);
             onEditTitle={() => setIsEditingTitle(true)}
             onEditData={handleOpenDataEditor}
             onSettings={() => setShowSettings(true)}
+            isReadOnly={isReadOnly}
           />
-          {onDuplicate && (
+          {onDuplicate && !isReadOnly && (
             <button
               onClick={handleDuplicate}
               className="w-8 h-8 rounded-lg bg-blue-500/20 hover:bg-blue-500 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
@@ -352,16 +359,18 @@ const yAxisMax = Math.ceil(maxValue * 1.2);
               </svg>
             </button>
           )}
-          <button
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onDelete();
-            }}
-            className="w-8 h-8 rounded-lg bg-red-500/20 hover:bg-red-500 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
-          >
-            <X size={16} />
-          </button>
+          {onDelete && !isReadOnly && (
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onDelete();
+              }}
+              className="w-8 h-8 rounded-lg bg-red-500/20 hover:bg-red-500 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
+            >
+              <X size={16} />
+            </button>
+          )}
         </div>
 
         <div 
@@ -431,6 +440,7 @@ const yAxisMax = Math.ceil(maxValue * 1.2);
         currentData={data}
         currentColors={colors}
         onSave={handleSaveData}
+        isReadOnly={isReadOnly}
       />
 
       <ChartSettingsModal
@@ -441,6 +451,7 @@ const yAxisMax = Math.ceil(maxValue * 1.2);
           setSettings(newSettings);
           saveData();
         }}
+        isReadOnly={isReadOnly}
       />
     </>
   );

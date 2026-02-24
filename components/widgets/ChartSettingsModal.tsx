@@ -12,13 +12,15 @@ interface ChartSettingsModalProps {
     animationDuration: number;
   };
   onSave: (settings: any) => void;
+  isReadOnly?: boolean;
 }
 
 export default function ChartSettingsModal({
   isOpen,
   onClose,
   settings,
-  onSave
+  onSave,
+  isReadOnly = false
 }: ChartSettingsModalProps) {
   const [localSettings, setLocalSettings] = useState(settings);
 
@@ -34,7 +36,7 @@ export default function ChartSettingsModal({
     onClose();
   };
 
-  if (!isOpen) return null;
+  if (!isOpen || isReadOnly) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

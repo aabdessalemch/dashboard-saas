@@ -13,9 +13,10 @@ interface Message {
 interface ChatPanelProps {
   onWidgetAction: (action: any) => void;
   currentWidgets: any[];
+  aiLimit?: { allowed: boolean; remaining: number; resetTime: Date | null };
 }
 
-export default function ChatPanel({ onWidgetAction, currentWidgets }: ChatPanelProps) {
+export default function ChatPanel({ onWidgetAction, currentWidgets, aiLimit }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -144,34 +145,33 @@ export default function ChatPanel({ onWidgetAction, currentWidgets }: ChatPanelP
 
     try {
       const dashboardContext = {
-  widgetCount: currentWidgets.length,
-  widgetTypes: currentWidgets.map((w: any) => {
-    const info: any = { 
-      id: w.id, 
-      type: w.type,
-      title: w.data?.title || `${w.type} widget`
-    };
-    
-    // Include actual data so AI can read it
-    if (w.type === 'table' && w.data?.rows) {
-  info.tableData = {
-    columns: w.data.columns?.map((c: any) => c.header) || [],
-    rowCount: w.data.rows.length,
-    allRows: w.data.rows // SEND ALL ROWS, not just 5!
-  };
-}
-    else if (['bar', 'line', 'pie', 'trend'].includes(w.type) && w.data?.data) {
-      info.chartData = w.data.data.slice(0, 10); // First 10 data points
-    } else if (w.type === 'kpi') {
-      info.kpiData = {
-        value: w.data?.value,
-        change: w.data?.change
+        widgetCount: currentWidgets.length,
+        widgetTypes: currentWidgets.map((w: any) => {
+          const info: any = { 
+            id: w.id, 
+            type: w.type,
+            title: w.data?.title || `${w.type} widget`
+          };
+          
+          if (w.type === 'table' && w.data?.rows) {
+            info.tableData = {
+              columns: w.data.columns?.map((c: any) => c.header) || [],
+              rowCount: w.data.rows.length,
+              allRows: w.data.rows
+            };
+          }
+          else if (['bar', 'line', 'pie', 'trend'].includes(w.type) && w.data?.data) {
+            info.chartData = w.data.data.slice(0, 10);
+          } else if (w.type === 'kpi') {
+            info.kpiData = {
+              value: w.data?.value,
+              change: w.data?.change
+            };
+          }
+          
+          return info;
+        })
       };
-    }
-    
-    return info;
-  })
-};
 
       const requestBody: any = {
         message: userMessage.content,
@@ -257,7 +257,11 @@ export default function ChatPanel({ onWidgetAction, currentWidgets }: ChatPanelP
           </div>
           <div>
             <h3 className="text-sm font-semibold text-white">AI Assistant</h3>
-            <p className="text-xs text-gray-400">Chat, upload CSV, paste images</p>
+            <p className="text-xs text-gray-400">
+              {aiLimit && aiLimit.remaining !== 999 
+                ? `${aiLimit.remaining}/10 generations left` 
+                : 'Chat, upload CSV, paste images'}
+            </p>
           </div>
         </div>
         <button className="text-white hover:bg-white/10 rounded-lg p-1 transition-colors">
@@ -353,6 +357,18 @@ export default function ChatPanel({ onWidgetAction, currentWidgets }: ChatPanelP
           )}
 
           <div className="p-4 border-t border-white/10">
+            {/* AI Limit Warning */}
+            {aiLimit && !aiLimit.allowed && aiLimit.resetTime && (
+              <div className="mb-2 px-3 py-2 bg-red-500/20 border border-red-500/30 rounded-lg">
+                <p className="text-red-200 text-xs font-medium">
+                  🚫 AI Limit Reached (0/10)
+                </p>
+                <p className="text-red-300 text-[10px]">
+                  Resets in {Math.ceil((aiLimit.resetTime.getTime() - Date.now()) / (1000 * 60 * 60))} hours
+                </p>
+              </div>
+            )}
+            
             {uploadedFile && (
               <div className="mb-2 flex items-center gap-2 px-3 py-2 bg-blue-500/20 rounded-lg border border-blue-500/30">
                 {uploadedFile.type === 'csv' ? <FileText size={14} className="text-blue-400" /> : <ImageIcon size={14} className="text-blue-400" />}
@@ -411,6 +427,7 @@ export default function ChatPanel({ onWidgetAction, currentWidgets }: ChatPanelP
             </div>
             <p className="text-[10px] text-gray-500 mt-2">
               📎 Upload CSV/Image • Ctrl+V to paste • {currentWidgets.length} widgets
+              {aiLimit && aiLimit.remaining !== 999 && ` • ${aiLimit.remaining}/10 AI left`}
             </p>
           </div>
         </>

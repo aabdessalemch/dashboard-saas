@@ -1,7 +1,54 @@
+"use client";
 import Link from "next/link";
 import { Check, X } from "lucide-react";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
 
-export default function PricingPage() {
+const PricingPage = () => {
+  const [isLoading, setIsLoading] = useState(false);
+  const router = useRouter();
+
+  const handleUpgrade = async () => {
+    setIsLoading(true);
+
+    try {
+      // Get current user
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      
+      if (authError || !user) {
+        // Redirect to sign in
+        router.push('/auth/login');
+        setIsLoading(false);
+        return;
+      }
+
+      // Create checkout session
+      const response = await fetch('/api/stripe/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.id, email: user.email }),
+      });
+
+      const { checkoutUrl, error } = await response.json();
+
+      if (error) {
+        alert('Error creating checkout session: ' + error);
+        setIsLoading(false);
+        return;
+      }
+
+      if (checkoutUrl) {
+        // Redirect to Stripe Checkout
+        window.location.href = checkoutUrl;
+      }
+    } catch (error: any) {
+      alert('Error: ' + error.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-r from-indigo-900 via-blue-800 to-teal-600">
       {/* Navigation */}
@@ -54,7 +101,7 @@ export default function PricingPage() {
               </li>
               <li className="flex items-start gap-3 text-gray-200">
                 <Check className="text-green-400 mt-1 flex-shrink-0" size={20} />
-                <span>Limited image upload </span>
+                <span>Limited image upload</span>
               </li>
             </ul>
 
@@ -68,9 +115,6 @@ export default function PricingPage() {
 
           {/* PRO PLAN */}
           <div className="bg-gradient-to-br from-blue-500 to-indigo-600 rounded-3xl p-8 hover:scale-105 transition-transform shadow-2xl relative">
-            <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-yellow-400 text-indigo-900 px-6 py-1 rounded-full text-sm font-bold">
-              POPULAR
-            </div>
 
             <div className="text-center mb-8">
               <h2 className="text-3xl font-bold text-white mb-2">Pro</h2>
@@ -105,12 +149,25 @@ export default function PricingPage() {
               </li>
             </ul>
 
-            <button className="block w-full text-center px-6 py-4 bg-white text-indigo-600 rounded-full font-semibold hover:bg-gray-100 transition shadow-lg">
-              Upgrade to Pro
+            <button 
+              onClick={handleUpgrade}
+              disabled={isLoading}
+              className="block w-full text-center px-6 py-4 bg-white text-indigo-600 rounded-full font-semibold hover:bg-gray-100 transition shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {isLoading ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-indigo-600/30 border-t-indigo-600 rounded-full animate-spin" />
+                  Processing...
+                </>
+              ) : (
+                'Upgrade to Pro'
+              )}
             </button>
           </div>
         </div>
       </div>
     </div>
   );
-}
+};
+
+export default PricingPage;

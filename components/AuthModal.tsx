@@ -36,31 +36,26 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }: AuthModalP
     };
   }, [isOpen]);
 
-  const handleGoogleLogin = async () => {
-    try {
-      setLoading(true);
-      setError("");
-      
-      const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: window.location.origin + '/dashboard',
-          queryParams: {
-            access_type: 'offline',
-            prompt: 'consent',
-          },
-        },
-      });
-
-      if (error) {
-        setError(error.message);
-      }
-    } catch (err: any) {
-      setError(err.message || 'An error occurred');
-    } finally {
-      setLoading(false);
+  const handleGoogleSignIn = async () => {
+  setLoading(true);  // ✅ Use 'loading', not 'isLoading'
+  
+  // Clear any previous auth state
+  sessionStorage.removeItem('auth_reloaded');
+  
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: `${window.location.origin}/dashboard`
     }
-  };
+  });
+  
+  if (error) {
+    console.error('Error signing in with Google:', error);
+    alert('Failed to sign in with Google. Please try again.');
+    setLoading(false);
+  }
+  // Don't set loading to false on success - user will be redirected
+};
 
   const handleEmailSignup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -174,7 +169,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }: AuthModalP
 
               <div className="space-y-3">
                 <button
-                  onClick={handleGoogleLogin}
+                  onClick={handleGoogleSignIn}
                   disabled={loading}
                   className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-white hover:bg-gray-100 text-gray-800 rounded-lg text-sm font-medium transition-all shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
                 >

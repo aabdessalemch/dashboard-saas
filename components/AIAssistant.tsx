@@ -1,19 +1,22 @@
 "use client";
 import { useState, useRef } from "react";
 import { X, Send, Sparkles, Loader2, Image } from "lucide-react";
+
 interface AIAssistantProps {
   isOpen: boolean;
   onClose: () => void;
   onGenerateWidgets: (widgets: any[]) => void;
+  userId?: string | null;  // ✅ ADD THIS
 }
 
-export default function AIAssistant({ isOpen, onClose, onGenerateWidgets }: AIAssistantProps) {
+export default function AIAssistant({ isOpen, onClose, onGenerateWidgets, userId }: AIAssistantProps) {
   const [message, setMessage] = useState("");
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [conversation, setConversation] = useState<{ role: string; content: string }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   if (!isOpen) return null;
 
@@ -40,13 +43,42 @@ export default function AIAssistant({ isOpen, onClose, onGenerateWidgets }: AIAs
   const handleSubmit = async () => {
     if (!message.trim() && !uploadedImage) return;
 
+    // ✅ CHECK AI LIMIT BEFORE GENERATING
+    if (userId) {
+      try {
+        const { canUseAI } = await import('@/lib/database');
+        const aiStatus = await canUseAI(userId);
+        
+        if (!aiStatus.allowed) {
+          const hoursLeft = aiStatus.resetTime 
+            ? Math.ceil((aiStatus.resetTime.getTime() - Date.now()) / (1000 * 60 * 60)) 
+            : 0;
+          
+          setConversation(prev => [...prev, { 
+            role: "error", 
+            content: `🚫 Free AI Limit Reached!\n\nYou've used all 10 AI widget generations for today.\nYour limit resets in ${hoursLeft} hours.\n\nUpgrade to Pro for unlimited AI generations!`
+          }]);
+          return;
+        }
+      } catch (err) {
+        console.error('Error checking AI limit:', err);
+      }
+    }
+
     setIsLoading(true);
     const userMessage = message.trim();
     
     setConversation(prev => [...prev, { role: "user", content: userMessage || "Analyze this image" }]);
+    setConversation(prev => [...prev, { role: "assistant", content: "⏳ Processing your request..." }]);
 
     try {
       console.log('🔵 Starting AI request...');
+      
+      // Create abort controller with 30 second timeout
+      abortControllerRef.current = new AbortController();
+      const timeoutId = setTimeout(() => {
+        abortControllerRef.current?.abort();
+      }, 30000);
       
       let imageData = null;
 
@@ -71,14 +103,18 @@ export default function AIAssistant({ isOpen, onClose, onGenerateWidgets }: AIAs
         body: JSON.stringify({
           messages: userMessage ? [userMessage] : ["Analyze this image and extract data"],
           image: imageData
-        })
+        }),
+        signal: abortControllerRef.current.signal
       });
+      
+      clearTimeout(timeoutId);
 
       console.log('📡 Response status:', response.status);
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'API request failed');
+        const errorData = await response.json().catch(() => ({}));
+        const errorMsg = errorData.error || 'API request failed';
+        throw new Error(errorMsg);
       }
 
       const data = await response.json();
@@ -88,7 +124,9 @@ export default function AIAssistant({ isOpen, onClose, onGenerateWidgets }: AIAs
         const aiResponse = data.content[0].text;
         console.log('🤖 AI said:', aiResponse.substring(0, 150));
         
-        setConversation(prev => [...prev, { role: "assistant", content: "Generating widgets..." }]);
+        setConversation(prev => prev.map((msg, idx) => 
+          idx === prev.length - 1 ? { role: "assistant", content: "✅ Generating widgets..." } : msg
+        ));
 
         try {
           let jsonText = aiResponse.trim();
@@ -110,6 +148,18 @@ export default function AIAssistant({ isOpen, onClose, onGenerateWidgets }: AIAs
           if (Array.isArray(widgets) && widgets.length > 0) {
             console.log('🎉 Creating widgets on dashboard!');
             onGenerateWidgets(widgets);
+            
+            // ✅ INCREMENT AI USAGE AFTER SUCCESSFUL GENERATION
+            if (userId) {
+              try {
+                const { incrementAIUsage } = await import('@/lib/database');
+                await incrementAIUsage(userId);
+                console.log('✅ AI usage incremented');
+              } catch (err) {
+                console.error('Error incrementing AI usage:', err);
+              }
+            }
+            
             setMessage("");
             setUploadedImage(null);
             setUploadedFileName(null);
@@ -125,7 +175,7 @@ export default function AIAssistant({ isOpen, onClose, onGenerateWidgets }: AIAs
           console.error("❌ Parse error:", parseError);
           setConversation(prev => [...prev, { 
             role: "error", 
-            content: "Couldn't parse AI response. Try rephrasing your request." 
+            content: "I had trouble understanding that request.\n\n💡 Try being more specific:\n• 'Create a KPI showing revenue $100K'\n• 'Bar chart comparing sales by region'\n• 'Create a pie chart for market distribution'\n• 'Make a line chart of monthly growth'"
           }]);
         }
       } else {
@@ -133,12 +183,23 @@ export default function AIAssistant({ isOpen, onClose, onGenerateWidgets }: AIAs
       }
     } catch (error: any) {
       console.error("❌ Error:", error);
+      let errorMsg = error.message;
+      
+      if (error.name === 'AbortError') {
+        errorMsg = 'Request timed out. The AI took too long to respond.\n\n💡 Try a simpler request or refresh and try again.';
+      } else if (errorMsg.includes('Failed to parse')) {
+        errorMsg = 'I couldn\'t understand that request format.\n\n💡 Try: "Create a bar chart with Q1: 100, Q2: 150, Q3: 200"';
+      } else if (errorMsg.includes('empty')) {
+        errorMsg = 'AI service returned empty response.\n\n💡 Try rephrasing or simplifying your request.';
+      }
+      
       setConversation(prev => [...prev, { 
         role: "error", 
-        content: `Error: ${error.message}. Check console (F12) for details.` 
+        content: `⚠️ ${errorMsg}` 
       }]);
     } finally {
       setIsLoading(false);
+      abortControllerRef.current = null;
     }
   };
 

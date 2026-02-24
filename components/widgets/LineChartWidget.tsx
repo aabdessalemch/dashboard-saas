@@ -13,7 +13,7 @@ interface DataPoint {
 }
 
 interface LineChartWidgetProps {
-  onDelete: () => void;
+  onDelete?: () => void;
   onDuplicate?: () => void;
   onPositionChange?: (x: number, y: number) => void;
   onSizeChange?: (width: number, height: number) => void;
@@ -26,6 +26,7 @@ interface LineChartWidgetProps {
   initialZIndex?: number;
   maxWidth?: number;
   initialData?: any;
+  isReadOnly?: boolean;
 }
 
 export default function LineChartWidget({ 
@@ -41,7 +42,8 @@ export default function LineChartWidget({
   initialHeight = 280,
   initialZIndex = 1,
   maxWidth = 1200,
-  initialData
+  initialData,
+  isReadOnly = false
 }: LineChartWidgetProps) {
   const [title, setTitle] = useState(initialData?.title || "Line Chart");
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -86,30 +88,23 @@ export default function LineChartWidget({
       if (initialData.colors && initialData.colors[0]) setLineColor(initialData.colors[0]);
       if (initialData.settings) setSettings(initialData.settings);
     }
-  }, [initialData]);
+  }, []);
 
   useEffect(() => {
     setZIndex(initialZIndex);
   }, [initialZIndex]);
 
-  const saveData = () => {
-    if (onDataChange) {
-      onDataChange({
-        title,
-        data,
-        colors: [lineColor],
-        settings
-      });
-    }
-  };
-
-  useEffect(() => {
-    saveData();
-  }, [title, data, lineColor, settings]);
-
   const handleSaveData = (newData: any[], newColors: string[]) => {
     setData(newData);
     setLineColor(newColors[0]);
+    if (onDataChange) {
+      onDataChange({
+        title,
+        data: newData,
+        colors: newColors,
+        settings
+      });
+    }
   };
 
   const handleTitleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -117,8 +112,9 @@ export default function LineChartWidget({
       setIsEditingTitle(false);
     }
   };
-
   const startDrag = (e: React.MouseEvent) => {
+    if (isReadOnly) return;
+    
     if ((e.target as HTMLElement)?.closest('button') || 
         (e.target as HTMLElement)?.closest('input')) {
       return;
@@ -156,6 +152,8 @@ export default function LineChartWidget({
   };
 
   const startResize = (direction: string) => (e: React.MouseEvent) => {
+    if (isReadOnly) return;
+    
     e.preventDefault();
     e.stopPropagation();
 
@@ -344,8 +342,9 @@ export default function LineChartWidget({
             onEditTitle={() => setIsEditingTitle(true)}
             onEditData={() => setShowDataEditor(true)}
             onSettings={() => setShowSettings(true)}
+            isReadOnly={isReadOnly}
           />
-          {onDuplicate && (
+          {onDuplicate && !isReadOnly && (
             <button
               onClick={onDuplicate}
               className="w-8 h-8 rounded-lg bg-blue-500/20 hover:bg-blue-500 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
@@ -357,12 +356,14 @@ export default function LineChartWidget({
               </svg>
             </button>
           )}
-          <button
-            onClick={onDelete}
-            className="w-8 h-8 rounded-lg bg-red-500/20 hover:bg-red-500 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
-          >
-            <X size={16} />
-          </button>
+          {onDelete && !isReadOnly && (
+            <button
+              onClick={onDelete}
+              className="w-8 h-8 rounded-lg bg-red-500/20 hover:bg-red-500 hover:scale-110 text-white transition-all duration-200 flex items-center justify-center"
+            >
+              <X size={16} />
+            </button>
+          )}
         </div>
 
         <div 
@@ -489,6 +490,7 @@ export default function LineChartWidget({
         currentData={data}
         currentColors={[lineColor]}
         onSave={handleSaveData}
+        isReadOnly={isReadOnly}
       />
 
       <ChartSettingsModal
@@ -496,6 +498,7 @@ export default function LineChartWidget({
         onClose={() => setShowSettings(false)}
         settings={settings}
         onSave={setSettings}
+        isReadOnly={isReadOnly}
       />
     </>
   );

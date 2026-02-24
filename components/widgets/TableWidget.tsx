@@ -4,7 +4,7 @@ import { X, Plus, Trash2, Settings, Palette, Save, ArrowDown, ArrowRight } from 
 import CreateChartModal from "./CreateChartModal";
 
 interface TableWidgetProps {
-  onDelete: () => void;
+  onDelete?: () => void;
   onDuplicate?: () => void;
   onPositionChange?: (x: number, y: number) => void;
   onSizeChange?: (width: number, height: number) => void;
@@ -17,6 +17,7 @@ interface TableWidgetProps {
   initialZIndex?: number;
   maxWidth?: number;
   initialData?: any;
+  isReadOnly?: boolean;
 }
 
 interface Cell {
@@ -36,7 +37,8 @@ export default function TableWidget({
   initialHeight = 500,
   initialZIndex = 1,
   maxWidth = 1200,
-  initialData
+  initialData,
+  isReadOnly = false
 }: TableWidgetProps) {
   const normalizeRows = (data: any): Cell[][] => {
     const defaultRows = [
@@ -135,11 +137,74 @@ export default function TableWidget({
     setZIndex(initialZIndex);
   }, [initialZIndex]);
 
-  const saveData = () => {
-    if (onDataChange) {
+ const saveData = () => {
+  if (onDataChange) {
+    onDataChange({
+      title,
+      rows,
+      columnWidths,
+      rowHeights,
+      headerBgColor,
+      rowBgColor,
+      alternateRowColor,
+      textColor,
+      borderColor,
+      customRowColors,
+      customColumnColors,
+      customRowTextColors,
+      customColumnTextColors,
+      customRowBold,
+      customColumnBold,
+      customCellColors,
+      customCellTextColors,
+      customCellBold,
+      customRowTextSizes,
+      customColumnTextSizes,
+      customCellTextSizes
+    });
+  }
+};
+
+const handleCreateChart = (chartType: string, xColumn: number, yColumn: number, startRow: number, endRow: number) => {
+  const chartData = rows.slice(startRow, endRow + 1).map(row => {
+    const name = row[xColumn]?.value || '';
+    const valueStr = row[yColumn]?.value || '0';
+    const cleanValue = valueStr.replace(/[$,KkMm%]/g, '');
+    const value = parseFloat(cleanValue) || 0;
+    
+    return chartType === 'trend' 
+      ? { date: name, value }
+      : { name, value };
+  }).filter(item => (item.name || item.date) && !isNaN(item.value));
+
+  const chartTitle = `${title} - ${chartType.charAt(0).toUpperCase() + chartType.slice(1)}`;
+
+  const widgetElement = containerRef.current?.closest('[data-widget-id]');
+  const widgetId = widgetElement?.getAttribute('data-widget-id') || '';
+
+  if (onDataChange) {
+    onDataChange({
+      action: 'create_chart',
+      chartType,
+      chartData,
+      chartTitle,
+      sourceTableId: widgetId,
+      tableConfig: { xColumn, yColumn, startRow, endRow }
+    });
+  }
+};
+
+const handleCellChange = (rowIndex: number, colIndex: number, value: string) => {
+  const newRows = [...rows];
+  newRows[rowIndex][colIndex].value = value;
+  setRows(newRows);
+  
+  // Update parent immediately
+  if (onDataChange) {
+    requestAnimationFrame(() => {
       onDataChange({
         title,
-        rows,
+        rows: newRows,
         columnWidths,
         rowHeights,
         headerBgColor,
@@ -158,153 +223,240 @@ export default function TableWidget({
         customCellBold,
         customRowTextSizes,
         customColumnTextSizes,
-        customCellTextSizes
+        customCellTextSizes,
+        action: 'table_data_changed'
       });
-    }
-  };
-
-  const handleCreateChart = (chartType: string, xColumn: number, yColumn: number, startRow: number, endRow: number) => {
-  const chartData = rows.slice(startRow, endRow + 1).map(row => {
-    const name = row[xColumn]?.value || '';
-    const valueStr = row[yColumn]?.value || '0';
-    const cleanValue = valueStr.replace(/[$,KkMm%]/g, '');
-    const value = parseFloat(cleanValue) || 0;
-    
-    return chartType === 'trend' 
-      ? { date: name, value }
-      : { name, value };
-  }).filter(item => (item.name || item.date) && !isNaN(item.value));
-
-  const chartTitle = `${title} - ${chartType.charAt(0).toUpperCase() + chartType.slice(1)}`;
-
-  if (onDataChange) {
-    onDataChange({
-      action: 'create_chart',
-      chartType,
-      chartData,
-      chartTitle
     });
   }
 };
 
-  const handleCellChange = (rowIndex: number, colIndex: number, value: string) => {
-    const newRows = [...rows];
-    newRows[rowIndex][colIndex].value = value;
-    setRows(newRows);
-    saveData();
-  };
-
-  const addRow = () => {
-    const newRow = rows[0].map(() => ({ value: "" }));
-    setRows([...rows, newRow]);
-    setRowHeights([...rowHeights, 44]);
-    saveData();
-  };
-
-  const addColumn = () => {
-    const newRows = rows.map(row => [...row, { value: "" }]);
-    setRows(newRows);
-    setColumnWidths([...columnWidths, 120]);
-    saveData();
-  };
-
-  const deleteRow = (rowIndex: number) => {
-    if (rows.length > 2) {
-      const newRows = rows.filter((_, i) => i !== rowIndex);
-      const newRowHeights = rowHeights.filter((_, i) => i !== rowIndex);
-      setRows(newRows);
-      setRowHeights(newRowHeights);
-      
-      const newCustomRowColors = { ...customRowColors };
-      delete newCustomRowColors[rowIndex];
-      setCustomRowColors(newCustomRowColors);
-      
-      const newCustomRowTextColors = { ...customRowTextColors };
-      delete newCustomRowTextColors[rowIndex];
-      setCustomRowTextColors(newCustomRowTextColors);
-      
-      const newCustomRowBold = { ...customRowBold };
-      delete newCustomRowBold[rowIndex];
-      setCustomRowBold(newCustomRowBold);
-      
-      const newCustomRowTextSizes = { ...customRowTextSizes };
-      delete newCustomRowTextSizes[rowIndex];
-      setCustomRowTextSizes(newCustomRowTextSizes);
-      
-      const newCustomCellColors = { ...customCellColors };
-      const newCustomCellTextColors = { ...customCellTextColors };
-      const newCustomCellBold = { ...customCellBold };
-      const newCustomCellTextSizes = { ...customCellTextSizes };
-      
-      Object.keys(newCustomCellColors).forEach(key => {
-        if (key.startsWith(`${rowIndex}-`)) {
-          delete newCustomCellColors[key];
-          delete newCustomCellTextColors[key];
-          delete newCustomCellBold[key];
-          delete newCustomCellTextSizes[key];
-        }
+const addRow = () => {
+  const newRow = rows[0].map(() => ({ value: "" }));
+  const newRows = [...rows, newRow];
+  const newRowHeights = [...rowHeights, 44];
+  setRows(newRows);
+  setRowHeights(newRowHeights);
+  
+  if (onDataChange) {
+    requestAnimationFrame(() => {
+      onDataChange({
+        title,
+        rows: newRows,
+        columnWidths,
+        rowHeights: newRowHeights,
+        headerBgColor,
+        rowBgColor,
+        alternateRowColor,
+        textColor,
+        borderColor,
+        customRowColors,
+        customColumnColors,
+        customRowTextColors,
+        customColumnTextColors,
+        customRowBold,
+        customColumnBold,
+        customCellColors,
+        customCellTextColors,
+        customCellBold,
+        customRowTextSizes,
+        customColumnTextSizes,
+        customCellTextSizes,
+        action: 'table_data_changed'
       });
-      
-      setCustomCellColors(newCustomCellColors);
-      setCustomCellTextColors(newCustomCellTextColors);
-      setCustomCellBold(newCustomCellBold);
-      setCustomCellTextSizes(newCustomCellTextSizes);
-      
-      if (selectedRow === rowIndex) setSelectedRow(null);
-      saveData();
-    }
-  };
+    });
+  }
+};
 
-  const deleteColumn = (colIndex: number) => {
-    if (rows[0].length > 2) {
-      const newRows = rows.map(row => row.filter((_, i) => i !== colIndex));
-      const newColumnWidths = columnWidths.filter((_, i) => i !== colIndex);
-      setRows(newRows);
-      setColumnWidths(newColumnWidths);
-      
-      const newCustomColumnColors = { ...customColumnColors };
-      delete newCustomColumnColors[colIndex];
-      setCustomColumnColors(newCustomColumnColors);
-      
-      const newCustomColumnTextColors = { ...customColumnTextColors };
-      delete newCustomColumnTextColors[colIndex];
-      setCustomColumnTextColors(newCustomColumnTextColors);
-      
-      const newCustomColumnBold = { ...customColumnBold };
-      delete newCustomColumnBold[colIndex];
-      setCustomColumnBold(newCustomColumnBold);
-      
-      const newCustomColumnTextSizes = { ...customColumnTextSizes };
-      delete newCustomColumnTextSizes[colIndex];
-      setCustomColumnTextSizes(newCustomColumnTextSizes);
-      
-      const newCustomCellColors = { ...customCellColors };
-      const newCustomCellTextColors = { ...customCellTextColors };
-      const newCustomCellBold = { ...customCellBold };
-      const newCustomCellTextSizes = { ...customCellTextSizes };
-      
-      Object.keys(newCustomCellColors).forEach(key => {
-        const [, col] = key.split('-');
-        if (parseInt(col) === colIndex) {
-          delete newCustomCellColors[key];
-          delete newCustomCellTextColors[key];
-          delete newCustomCellBold[key];
-          delete newCustomCellTextSizes[key];
-        }
+const addColumn = () => {
+  const newRows = rows.map(row => [...row, { value: "" }]);
+  const newColumnWidths = [...columnWidths, 120];
+  setRows(newRows);
+  setColumnWidths(newColumnWidths);
+  
+  if (onDataChange) {
+    requestAnimationFrame(() => {
+      onDataChange({
+        title,
+        rows: newRows,
+        columnWidths: newColumnWidths,
+        rowHeights,
+        headerBgColor,
+        rowBgColor,
+        alternateRowColor,
+        textColor,
+        borderColor,
+        customRowColors,
+        customColumnColors,
+        customRowTextColors,
+        customColumnTextColors,
+        customRowBold,
+        customColumnBold,
+        customCellColors,
+        customCellTextColors,
+        customCellBold,
+        customRowTextSizes,
+        customColumnTextSizes,
+        customCellTextSizes,
+        action: 'table_data_changed'
       });
-      
-      setCustomCellColors(newCustomCellColors);
-      setCustomCellTextColors(newCustomCellTextColors);
-      setCustomCellBold(newCustomCellBold);
-      setCustomCellTextSizes(newCustomCellTextSizes);
-      
-      if (selectedColumn === colIndex) setSelectedColumn(null);
-      saveData();
+    });
+  }
+};
+
+const deleteRow = (rowIndex: number) => {
+  if (rows.length > 2) {
+    const newRows = rows.filter((_, i) => i !== rowIndex);
+    const newRowHeights = rowHeights.filter((_, i) => i !== rowIndex);
+    setRows(newRows);
+    setRowHeights(newRowHeights);
+    
+    const newCustomRowColors = { ...customRowColors };
+    delete newCustomRowColors[rowIndex];
+    setCustomRowColors(newCustomRowColors);
+    
+    const newCustomRowTextColors = { ...customRowTextColors };
+    delete newCustomRowTextColors[rowIndex];
+    setCustomRowTextColors(newCustomRowTextColors);
+    
+    const newCustomRowBold = { ...customRowBold };
+    delete newCustomRowBold[rowIndex];
+    setCustomRowBold(newCustomRowBold);
+    
+    const newCustomRowTextSizes = { ...customRowTextSizes };
+    delete newCustomRowTextSizes[rowIndex];
+    setCustomRowTextSizes(newCustomRowTextSizes);
+    
+    const newCustomCellColors = { ...customCellColors };
+    const newCustomCellTextColors = { ...customCellTextColors };
+    const newCustomCellBold = { ...customCellBold };
+    const newCustomCellTextSizes = { ...customCellTextSizes };
+    
+    Object.keys(newCustomCellColors).forEach(key => {
+      if (key.startsWith(`${rowIndex}-`)) {
+        delete newCustomCellColors[key];
+        delete newCustomCellTextColors[key];
+        delete newCustomCellBold[key];
+        delete newCustomCellTextSizes[key];
+      }
+    });
+    
+    setCustomCellColors(newCustomCellColors);
+    setCustomCellTextColors(newCustomCellTextColors);
+    setCustomCellBold(newCustomCellBold);
+    setCustomCellTextSizes(newCustomCellTextSizes);
+    
+    if (selectedRow === rowIndex) setSelectedRow(null);
+    
+    if (onDataChange) {
+      requestAnimationFrame(() => {
+        onDataChange({
+          title,
+          rows: newRows,
+          columnWidths,
+          rowHeights: newRowHeights,
+          headerBgColor,
+          rowBgColor,
+          alternateRowColor,
+          textColor,
+          borderColor,
+          customRowColors: newCustomRowColors,
+          customColumnColors,
+          customRowTextColors: newCustomRowTextColors,
+          customColumnTextColors,
+          customRowBold: newCustomRowBold,
+          customColumnBold,
+          customCellColors: newCustomCellColors,
+          customCellTextColors: newCustomCellTextColors,
+          customCellBold: newCustomCellBold,
+          customRowTextSizes: newCustomRowTextSizes,
+          customColumnTextSizes,
+          customCellTextSizes: newCustomCellTextSizes,
+          action: 'table_data_changed',
+          deletedRowIndex: rowIndex
+        });
+      });
     }
-  };
+  }
+};
+
+const deleteColumn = (colIndex: number) => {
+  if (rows[0].length > 2) {
+    const newRows = rows.map(row => row.filter((_, i) => i !== colIndex));
+    const newColumnWidths = columnWidths.filter((_, i) => i !== colIndex);
+    setRows(newRows);
+    setColumnWidths(newColumnWidths);
+    
+    const newCustomColumnColors = { ...customColumnColors };
+    delete newCustomColumnColors[colIndex];
+    setCustomColumnColors(newCustomColumnColors);
+    
+    const newCustomColumnTextColors = { ...customColumnTextColors };
+    delete newCustomColumnTextColors[colIndex];
+    setCustomColumnTextColors(newCustomColumnTextColors);
+    
+    const newCustomColumnBold = { ...customColumnBold };
+    delete newCustomColumnBold[colIndex];
+    setCustomColumnBold(newCustomColumnBold);
+    
+    const newCustomColumnTextSizes = { ...customColumnTextSizes };
+    delete newCustomColumnTextSizes[colIndex];
+    setCustomColumnTextSizes(newCustomColumnTextSizes);
+    
+    const newCustomCellColors = { ...customCellColors };
+    const newCustomCellTextColors = { ...customCellTextColors };
+    const newCustomCellBold = { ...customCellBold };
+    const newCustomCellTextSizes = { ...customCellTextSizes };
+    
+    Object.keys(newCustomCellColors).forEach(key => {
+      const [, col] = key.split('-');
+      if (parseInt(col) === colIndex) {
+        delete newCustomCellColors[key];
+        delete newCustomCellTextColors[key];
+        delete newCustomCellBold[key];
+        delete newCustomCellTextSizes[key];
+      }
+    });
+    
+    setCustomCellColors(newCustomCellColors);
+    setCustomCellTextColors(newCustomCellTextColors);
+    setCustomCellBold(newCustomCellBold);
+    setCustomCellTextSizes(newCustomCellTextSizes);
+    
+    if (selectedColumn === colIndex) setSelectedColumn(null);
+    
+    // ✅ Notify with deleted column info
+    if (onDataChange) {
+      onDataChange({
+        title,
+        rows: newRows,
+        columnWidths: newColumnWidths,
+        rowHeights,
+        headerBgColor,
+        rowBgColor,
+        alternateRowColor,
+        textColor,
+        borderColor,
+        customRowColors,
+        customColumnColors: newCustomColumnColors,
+        customRowTextColors,
+        customColumnTextColors: newCustomColumnTextColors,
+        customRowBold,
+        customColumnBold: newCustomColumnBold,
+        customCellColors: newCustomCellColors,
+        customCellTextColors: newCustomCellTextColors,
+        customCellBold: newCustomCellBold,
+        customRowTextSizes,
+        customColumnTextSizes: newCustomColumnTextSizes,
+        customCellTextSizes: newCustomCellTextSizes,
+        action: 'table_data_changed',
+        deletedColumnIndex: colIndex // ✅ ADD THIS
+      });
+    }
+  }
+};
 
   const startDrag = (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement)?.closest('button') || 
+    if (isReadOnly || (e.target as HTMLElement)?.closest('button') || 
         (e.target as HTMLElement)?.closest('input') ||
         (e.target as HTMLElement)?.closest('td') ||
         (e.target as HTMLElement)?.closest('.edit-panel')) {
@@ -341,6 +493,8 @@ export default function TableWidget({
   };
 
   const startResize = (direction: string) => (e: React.MouseEvent) => {
+    if (isReadOnly) return;
+    
     e.preventDefault();
     e.stopPropagation();
 
@@ -678,15 +832,17 @@ export default function TableWidget({
               <line x1="6" y1="20" x2="6" y2="14"></line>
             </svg>
           </button>
-          <button
-            data-settings-button
-            onClick={() => setShowEditPanel(!showEditPanel)}
-            className={`w-8 h-8 rounded-lg ${showEditPanel ? 'bg-blue-500' : 'bg-white/10 hover:bg-blue-500/80'} text-white transition-all flex items-center justify-center shadow-lg`}
-            title="Edit Settings"
-          >
-            <Settings size={16} />
-          </button>
-          {onDuplicate && (
+          {!isReadOnly && (
+            <button
+              data-settings-button
+              onClick={() => setShowEditPanel(!showEditPanel)}
+              className={`w-8 h-8 rounded-lg ${showEditPanel ? 'bg-blue-500' : 'bg-white/10 hover:bg-blue-500/80'} text-white transition-all flex items-center justify-center shadow-lg`}
+              title="Edit Settings"
+            >
+              <Settings size={16} />
+            </button>
+          )}
+          {onDuplicate && !isReadOnly && (
             <button 
               onClick={onDuplicate}
               className="w-8 h-8 rounded-lg bg-blue-500/20 hover:bg-blue-500 text-white transition-all flex items-center justify-center shadow-lg"
@@ -698,13 +854,15 @@ export default function TableWidget({
               </svg>
             </button>
           )}
-          <button
-            onClick={onDelete}
-            className="w-8 h-8 rounded-lg bg-red-500/20 hover:bg-red-500 text-white transition-all flex items-center justify-center shadow-lg"
-            title="Delete"
-          >
-            <X size={16} />
-          </button>
+          {onDelete && !isReadOnly && (
+            <button
+              onClick={onDelete}
+              className="w-8 h-8 rounded-lg bg-red-500/20 hover:bg-red-500 text-white transition-all flex items-center justify-center shadow-lg"
+              title="Delete"
+            >
+              <X size={16} />
+            </button>
+          )}
         </div>
 
         {showEditPanel && (
@@ -1100,7 +1258,7 @@ export default function TableWidget({
                         position: 'relative'
                       }}
                     >
-                      {editingCell?.row === 0 && editingCell?.col === colIndex ? (
+                      {editingCell?.row === 0 && editingCell?.col === colIndex && !isReadOnly ? (
                         <input
                           type="text"
                           value={cell.value}
@@ -1116,10 +1274,11 @@ export default function TableWidget({
                         />
                       ) : (
                         <div 
-                          onDoubleClick={() => setEditingCell({ row: 0, col: colIndex })}
+                          onDoubleClick={() => !isReadOnly && setEditingCell({ row: 0, col: colIndex })}
                           onClick={(e) => e.stopPropagation()}
-                          className="cell-content cursor-text min-h-[20px] w-full"
-                          title="Double-click to edit"
+                          className={`cell-content ${!isReadOnly ? 'cursor-text' : 'cursor-default'} min-h-[20px] w-full`}
+                          title={!isReadOnly ? "Double-click to edit" : ""}
+                        
                         >
                           {cell.value || '\u00A0'}
                         </div>
@@ -1204,7 +1363,7 @@ export default function TableWidget({
                           height: `${rowHeights[rowIndex + 1]}px`
                         }}
                       >
-                        {editingCell?.row === rowIndex + 1 && editingCell?.col === colIndex ? (
+                        {editingCell?.row === rowIndex + 1 && editingCell?.col === colIndex && !isReadOnly ? (
                           <input
                             type="text"
                             value={cell.value}
@@ -1220,10 +1379,11 @@ export default function TableWidget({
                           />
                         ) : (
                           <div 
-                            onDoubleClick={() => setEditingCell({ row: rowIndex + 1, col: colIndex })}
+                            onDoubleClick={() => !isReadOnly && setEditingCell({ row: rowIndex + 1, col: colIndex })}
                             onClick={(e) => e.stopPropagation()}
-                            className="cell-content cursor-text min-h-[20px] w-full"
-                            title="Double-click to edit"
+                            className={`cell-content ${!isReadOnly ? 'cursor-text' : 'cursor-default'} min-h-[20px] w-full`}
+                            title={!isReadOnly ? "Double-click to edit" : ""}
+                          
                           >
                             {cell.value || '\u00A0'}
                           </div>
