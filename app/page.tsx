@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { Star } from "lucide-react";
+import { Star, Mail, Phone, Globe } from "lucide-react";
 import { getReviews, createReview, Review } from "@/lib/reviews";
 
 export default function Home() {
@@ -72,9 +72,6 @@ export default function Home() {
           <Link href="/pricing" className="hover:text-white transition">
             Pricing
           </Link>
-          <Link href="/contact" className="hover:text-white transition">
-            Contact
-          </Link>
         </div>
       </nav>
 
@@ -91,7 +88,7 @@ export default function Home() {
             </p>
             <Link
               href="/dashboard"
-              className="inline-block px-38 py-4 bg-white text-indigo-900 rounded-full font-semibold hover:bg-gray-100 transition shadow-lg text-lg"
+              className="inline-block px-6 py-4 bg-white text-indigo-900 rounded-full font-semibold hover:bg-gray-100 transition shadow-lg text-lg"
             >
               Create Dashboard
             </Link>
@@ -283,6 +280,67 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {/* Contact Section */}
+      <div className="border-t border-white/20 bg-black/20">
+        <div className="container mx-auto px-8 py-20">
+          <h2 className="text-4xl font-light text-white text-center mb-16">Get In Touch</h2>
+          <div className="flex justify-center">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-12 max-w-4xl">
+              {/* Website */}
+              <div className="flex flex-col items-center text-center group">
+                <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-400 to-cyan-500 flex items-center justify-center mb-4 shadow-lg">
+                  <Globe size={32} className="text-white" />
+                </div>
+                <h4 className="text-white text-lg font-semibold mb-2">Website</h4>
+                <a
+                  href="https://abdesslemch.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-gray-300 hover:text-white transition-colors text-base font-light"
+                >
+                  abdesslemch.com
+                </a>
+              </div>
+
+              {/* Email */}
+              <div className="flex flex-col items-center text-center group">
+                <div className="w-16 h-16 rounded-full bg-gradient-to-br from-pink-400 to-red-500 flex items-center justify-center mb-4 shadow-lg">
+                  <Mail size={32} className="text-white" />
+                </div>
+                <h4 className="text-white text-lg font-semibold mb-2">Email</h4>
+                <a
+                  href="mailto:aabdessalem.chaouch@gmail.com"
+                  className="text-gray-300 hover:text-white transition-colors text-base font-light"
+                >
+                  aabdessalem.chaouch@gmail.com
+                </a>
+              </div>
+
+              {/* Phone */}
+              <div className="flex flex-col items-center text-center group">
+                <div className="w-16 h-16 rounded-full bg-gradient-to-br from-purple-400 to-indigo-500 flex items-center justify-center mb-4 shadow-lg">
+                  <Phone size={32} className="text-white" />
+                </div>
+                <h4 className="text-white text-lg font-semibold mb-2">Phone</h4>
+                <a
+                  href="tel:+14374511297"
+                  className="text-gray-300 hover:text-white transition-colors text-base font-light"
+                >
+                  +1 (437)-451-1297
+                </a>
+              </div>
+            </div>
+          </div>
+
+          {/* Divider */}
+          <div className="border-t border-white/10 mt-16 pt-8">
+            <p className="text-gray-400 text-center text-sm">
+              © 2026 Talk To Data. All rights reserved.
+            </p>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
