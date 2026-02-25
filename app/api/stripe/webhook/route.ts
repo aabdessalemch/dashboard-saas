@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
         const subscriptionId = session.subscription as string;
 
         if (userId && subscriptionId) {
-          const subscription = await stripe.subscriptions.retrieve(subscriptionId) as Stripe.Subscription;
+          const subscription = (await stripe.subscriptions.retrieve(subscriptionId)) as any;
 
           await supabase
             .from('profiles')
@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
       }
 
       case 'customer.subscription.updated': {
-        const subscription = event.data.object as Stripe.Subscription;
+        const subscription = event.data.object as any;
         const userId = subscription.metadata?.supabase_user_id;
 
         if (userId) {
