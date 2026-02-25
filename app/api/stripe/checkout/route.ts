@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     // Find or create a Stripe customer by email.
     // Avoid forcing a custom customer id — create a proper customer and
     // (in production) persist the returned `customer.id` in your database.
-    let customer: Stripe.Response<Stripe.Customer> | null = null;
+    let customer: Stripe.Customer | null = null;
 
     const existing = await stripe.customers.list({ email, limit: 1 });
     if (existing.data && existing.data.length > 0) {
@@ -27,9 +27,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Create checkout session
-    const origin = req.headers.get('origin') || 'http://localhost:3001';
-    // Allow overriding the site URL with an env var for production deployments
-    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || origin;
+    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || new URL(req.url).origin;
     const baseUrl = siteUrl;
 
     const session = await stripe.checkout.sessions.create({
