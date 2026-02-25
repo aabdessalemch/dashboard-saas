@@ -401,16 +401,16 @@ export async function canCreateProject(userId: string): Promise<boolean> {
   }
 }
 
-export async function canUseAI(userId: string): Promise<{ allowed: boolean; remaining: number; resetTime?: Date }> {
+export async function canUseAI(userId: string): Promise<{ allowed: boolean; remaining: number; resetTime: Date | null }> {
   try {
     const subscription = await getUserSubscription(userId);
     
     if (!subscription) {
-      return { allowed: false, remaining: 0 };
+      return { allowed: false, remaining: 0, resetTime: null };
     }
 
     if (subscription.subscription_tier !== 'free') {
-      return { allowed: true, remaining: 999 };
+      return { allowed: true, remaining: 999, resetTime: null };
     }
 
     const now = new Date();
@@ -438,7 +438,7 @@ export async function canUseAI(userId: string): Promise<{ allowed: boolean; rema
     return { allowed: true, remaining, resetTime: new Date(resetTime.getTime() + 24 * 60 * 60 * 1000) };
   } catch (err) {
     console.error('Error in canUseAI:', err);
-    return { allowed: false, remaining: 0 };
+    return { allowed: false, remaining: 0, resetTime: null };
   }
 }
 
