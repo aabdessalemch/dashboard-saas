@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: '2022-11-15',
+});
 
 export async function POST(req: NextRequest) {
   try {
@@ -11,13 +13,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing userId or email' }, { status: 400 });
     }
 
-    // Find or create a Stripe customer by email.
-    // Avoid forcing a custom customer id — create a proper customer and
-    // (in production) persist the returned `customer.id` in your database.
-    let customer: Stripe.Customer | null = null;
+    // Find or create a Stripe customer by email
+    let customer: Stripe.Customer;
 
     const existing = await stripe.customers.list({ email, limit: 1 });
-    if (existing.data && existing.data.length > 0) {
+    if (existing.data.length > 0) {
       customer = existing.data[0];
     } else {
       customer = await stripe.customers.create({
@@ -27,11 +27,10 @@ export async function POST(req: NextRequest) {
     }
 
     // Create checkout session
-    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || new URL(req.url).origin;
-    const baseUrl = siteUrl;
+    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || new URL(req.url).origin;
 
     const session = await stripe.checkout.sessions.create({
-      customer: customer!.id,
+      customer: customer.id,
       payment_method_types: ['card'],
       line_items: [
         {
