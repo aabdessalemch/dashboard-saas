@@ -208,7 +208,11 @@ const PricingPage = () => {
           isOpen={showUpgradeModal}
           onClose={() => setShowUpgradeModal(false)}
           userId={currentUserId}
-          userEmail={supabase.auth.user()?.email || ""}
+          userEmail={(() => {
+            // Use getUser() to get the current user's email
+            const user = (typeof window !== 'undefined' && supabase.auth && supabase.auth.getUser) ? window.localStorage.getItem('sb-user-email') : null;
+            return user || "";
+          })()}
         />
       )}
     </div>
