@@ -4,49 +4,26 @@ import { Check, X, Mail, Phone, Globe } from "lucide-react";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import UpgradeModal from "@/components/UpgradeModal";
 
 const PricingPage = () => {
   const [isLoading, setIsLoading] = useState(false);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const router = useRouter();
 
-  const handleUpgrade = async () => {
-    setIsLoading(true);
-
-    try {
-      // Get current user
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      
-      if (authError || !user) {
-        // Redirect to sign in
-        router.push('/auth/login');
-        setIsLoading(false);
-        return;
-      }
-
-      // Create checkout session
-      const response = await fetch('/api/stripe/checkout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id, email: user.email }),
-      });
-
-      const { checkoutUrl, error } = await response.json();
-
-      if (error) {
-        alert('Error creating checkout session: ' + error);
-        setIsLoading(false);
-        return;
-      }
-
-      if (checkoutUrl) {
-        // Redirect to Stripe Checkout
-        window.location.href = checkoutUrl;
-      }
-    } catch (error: any) {
-      alert('Error: ' + error.message);
-    } finally {
-      setIsLoading(false);
+  const handleUpgradeClick = async () => {
+    // Get current user
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    
+    if (authError || !user) {
+      // Redirect to sign in
+      router.push('/auth/login');
+      return;
     }
+
+    setCurrentUserId(user.id);
+    setShowUpgradeModal(true);
   };
 
   return (
@@ -147,7 +124,7 @@ const PricingPage = () => {
             </ul>
 
             <button 
-              onClick={handleUpgrade}
+              onClick={handleUpgradeClick}
               disabled={isLoading}
               className="block w-full text-center px-6 py-4 bg-white text-indigo-600 rounded-full font-semibold hover:bg-gray-100 transition shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
@@ -224,6 +201,16 @@ const PricingPage = () => {
           </div>
         </div>
       </div>
+
+      {/* Upgrade Modal */}
+      {showUpgradeModal && currentUserId && (
+        <UpgradeModal 
+          isOpen={showUpgradeModal}
+          onClose={() => setShowUpgradeModal(false)}
+          userId={currentUserId}
+          userEmail="aabdessalem.chaouch@gmail.com"
+        />
+      )}
     </div>
   );
 };
