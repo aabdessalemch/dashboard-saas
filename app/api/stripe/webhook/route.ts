@@ -58,12 +58,20 @@ export async function POST(req: NextRequest) {
         const userId = subscription.metadata?.supabase_user_id;
 
         if (userId) {
+          // If subscription is set to cancel at period end, keep pro until then
+          let update: any = {
+            subscription_status: subscription.status,
+            subscription_current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
+          };
+          if (subscription.cancel_at_period_end) {
+            update.subscription_status = 'cancel_at_period_end';
+            update.cancel_at = subscription.cancel_at ? new Date(subscription.cancel_at * 1000).toISOString() : null;
+          } else {
+            update.cancel_at = null;
+          }
           await supabase
             .from('profiles')
-            .update({
-              subscription_status: subscription.status,
-              subscription_current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
-            })
+            .update(update)
             .eq('id', userId);
 
           console.log('✅ Subscription updated for user:', userId);

@@ -17,8 +17,8 @@ const PricingPage = () => {
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     
     if (authError || !user) {
-      // Redirect to sign in
-      router.push('/auth/login');
+      // Redirect to dashboard for login/signup
+      router.push('/dashboard');
       return;
     }
 

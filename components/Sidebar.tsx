@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Plus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Folder, FolderOpen, LayoutDashboard, X, LogOut, Users, Eye, Edit, GripVertical, Zap } from "lucide-react";
+import { Plus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Folder, FolderOpen, LayoutDashboard, X, LogOut, Users, Eye, Edit, GripVertical, Zap, AlertCircle } from "lucide-react";
 import ChatPanel from "./ChatPanel";
 import AuthModal from "./AuthModal";
 import { supabase } from "@/lib/supabase";
@@ -64,6 +64,8 @@ export default function Sidebar({
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [user, setUser] = useState<any>(null);
+  const [subscriptionTier, setSubscriptionTier] = useState<'free' | 'pro'>('free');
+    const [cancelAt, setCancelAt] = useState<string | null>(null);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
@@ -74,11 +76,16 @@ export default function Sidebar({
   const [folderToDelete, setFolderToDelete] = useState<{ id: string; name: string } | null>(null);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [isCancelingSubscription, setIsCancelingSubscription] = useState(false);
 
   useEffect(() => {
     checkUser();
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
+      if (session?.user) {
+        fetchSubscriptionTier(session.user.id);
+      }
     });
     return () => authListener?.subscription.unsubscribe();
   }, []);
@@ -86,6 +93,22 @@ export default function Sidebar({
   const checkUser = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     setUser(user);
+    if (user) {
+      fetchSubscriptionTier(user.id);
+    }
+  };
+
+  const fetchSubscriptionTier = async (userId: string) => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('subscription_tier, subscription_status, cancel_at')
+      .eq('id', userId)
+      .single();
+
+    if (!error && data) {
+      setSubscriptionTier(data.subscription_tier === 'pro' ? 'pro' : 'free');
+      setCancelAt(data.cancel_at || null);
+    }
   };
 
   const handleSignOut = async () => {
@@ -93,6 +116,38 @@ export default function Sidebar({
     if (!error) {
       setUser(null);
       window.location.reload();
+    }
+  };
+
+  const handleCancelSubscription = async () => {
+    if (!user) return;
+    
+    setIsCancelingSubscription(true);
+    try {
+      const response = await fetch('/api/stripe/cancel-subscription', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.id }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        alert('Error canceling subscription: ' + data.error);
+        setIsCancelingSubscription(false);
+        return;
+      }
+
+      alert('Subscription canceled successfully. You will not be charged again.');
+      setShowCancelModal(false);
+      setShowUserMenu(false);
+      
+      // Refresh subscription tier
+      await fetchSubscriptionTier(user.id);
+    } catch (error: any) {
+      alert('Error: ' + error.message);
+    } finally {
+      setIsCancelingSubscription(false);
     }
   };
 
@@ -564,17 +619,42 @@ export default function Sidebar({
                     <div className="bg-gradient-to-br from-slate-800 to-slate-900 border border-white/10 rounded-xl p-3 space-y-2 animate-in fade-in zoom-in duration-200">
                       <div className="px-3 py-2 bg-gradient-to-r from-blue-500/20 to-purple-500/20 rounded-lg border border-blue-500/30">
                         <p className="text-xs text-gray-300 mb-2">Current Plan</p>
-                        <p className="text-sm font-semibold text-white mb-3">Free</p>
-                        <button
-                          onClick={() => {
-                            setShowUpgradeModal(true);
-                            setShowUserMenu(false);
-                          }}
-                          className="w-full py-2 bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white rounded-lg font-semibold text-sm transition-all shadow-lg hover:shadow-xl flex items-center justify-center gap-2"
-                        >
-                          <Zap size={14} />
-                          Upgrade to Pro - $19/mo
-                        </button>
+                        <p className="text-sm font-semibold text-white mb-3">
+                          {subscriptionTier === 'pro' ? (
+                            <span className="flex flex-col gap-1">
+                              <span className="flex items-center gap-2">
+                                <span className="w-2 h-2 bg-yellow-400 rounded-full"></span>
+                                Pro Plan
+                              </span>
+                              {cancelAt && (
+                                <span className="text-xs text-yellow-200 mt-1">Will cancel on {new Date(cancelAt).toLocaleDateString()}</span>
+                              )}
+                            </span>
+                          ) : (
+                            <span>Free Plan</span>
+                          )}
+                        </p>
+                        {subscriptionTier === 'pro' ? (
+                          <button
+                            onClick={() => setShowCancelModal(true)}
+                            className="w-full py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg font-semibold text-sm transition-all border border-red-500/30 flex items-center justify-center gap-2"
+                          >
+                            <AlertCircle size={14} />
+                            Cancel Subscription
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setShowUpgradeModal(true);
+                              setShowUserMenu(false);
+                            }}
+                            className="w-full py-2 bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white rounded-lg font-semibold text-sm transition-all shadow-lg hover:shadow-xl flex items-center justify-center gap-2"
+                          >
+                            <Zap size={14} />
+                            Upgrade to Pro - $19/mo
+                          </button>
+                        )}
+                        
                       </div>
                     </div>
                   )}
@@ -641,7 +721,52 @@ export default function Sidebar({
         </div>
       )}
 
-      {showUpgradeModal && user && <UpgradeModal isOpen={showUpgradeModal} onClose={() => setShowUpgradeModal(false)} userId={user.id} userEmail="aabdessalem.chaouch@gmail.com" />}
+      {showUpgradeModal && user && <UpgradeModal isOpen={showUpgradeModal} onClose={() => { setShowUpgradeModal(false); fetchSubscriptionTier(user.id); }} userId={user.id} userEmail="aabdessalem.chaouch@gmail.com" />}
+
+      {/* Cancel Subscription Modal */}
+      {showCancelModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+          <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl border border-red-500/30 shadow-2xl p-6 max-w-sm w-full animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 rounded-xl bg-red-500/20 flex items-center justify-center">
+                <AlertCircle size={24} className="text-red-400" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-white">Cancel Subscription?</h3>
+                <p className="text-sm text-gray-400">Pro Plan</p>
+              </div>
+            </div>
+
+            <p className="text-gray-300 mb-6">
+              Are you sure you want to cancel your Pro subscription? You will lose access to unlimited projects and AI generations. You won't be charged again.
+            </p>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowCancelModal(false)}
+                disabled={isCancelingSubscription}
+                className="flex-1 px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl font-medium transition-all disabled:opacity-50"
+              >
+                Keep Subscription
+              </button>
+              <button
+                onClick={handleCancelSubscription}
+                disabled={isCancelingSubscription}
+                className="flex-1 px-4 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-xl font-semibold transition-all shadow-lg hover:shadow-red-500/50 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {isCancelingSubscription ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Canceling...
+                  </>
+                ) : (
+                  'Cancel Subscription'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
