@@ -208,7 +208,7 @@ const PricingPage = () => {
           isOpen={showUpgradeModal}
           onClose={() => setShowUpgradeModal(false)}
           userId={currentUserId}
-          userEmail="aabdessalem.chaouch@gmail.com"
+          userEmail={supabase.auth.user()?.email || ""}
         />
       )}
     </div>

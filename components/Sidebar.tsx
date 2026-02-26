@@ -721,7 +721,7 @@ export default function Sidebar({
         </div>
       )}
 
-      {showUpgradeModal && user && <UpgradeModal isOpen={showUpgradeModal} onClose={() => { setShowUpgradeModal(false); fetchSubscriptionTier(user.id); }} userId={user.id} userEmail="aabdessalem.chaouch@gmail.com" />}
+      {showUpgradeModal && user && <UpgradeModal isOpen={showUpgradeModal} onClose={() => { setShowUpgradeModal(false); fetchSubscriptionTier(user.id); }} userId={user.id} userEmail={user.email} />}
 
       {/* Cancel Subscription Modal */}
       {showCancelModal && (
