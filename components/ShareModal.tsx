@@ -18,6 +18,8 @@ export default function ShareModal({ isOpen, onClose, projectId, projectName, us
   const [isSharing, setIsSharing] = useState(false);
   const [shares, setShares] = useState<ProjectShare[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [updatingShareId, setUpdatingShareId] = useState<string | null>(null);
+  const [infoBox, setInfoBox] = useState<{ type: 'info' | 'error'; message: string } | null>(null);
   const [emailSuggestions, setEmailSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
@@ -74,24 +76,20 @@ useEffect(() => {
 
   const handleShare = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+    setInfoBox(null);
     if (!email.trim()) {
-      alert('Please enter an email address');
+      setInfoBox({ type: 'error', message: 'Please enter an email address.' });
       return;
     }
-
     setIsSharing(true);
-    
     const result = await shareProject(projectId, userId, email, permission);
-    
     if (result) {
       setEmail("");
       setPermission('viewer');
       setShowSuggestions(false);
       await loadShares();
-      alert(`Project shared successfully with ${email}!`);
+      setInfoBox({ type: 'info', message: `Project shared successfully with ${email}!` });
     }
-    
     setIsSharing(false);
   };
 
@@ -108,12 +106,15 @@ useEffect(() => {
   };
 
   const handleUpdatePermission = async (shareId: string, newPermission: 'viewer' | 'editor') => {
+    setUpdatingShareId(shareId);
     const success = await updateSharePermission(shareId, newPermission);
     if (success) {
+      setShares((prev) => prev.map(s => s.id === shareId ? { ...s, permission: newPermission } : s));
       await loadShares();
     } else {
-      alert('Failed to update permission');
+      setInfoBox({ type: 'error', message: 'Failed to update permission.' });
     }
+    setUpdatingShareId(null);
   };
 
   const selectSuggestion = (suggestedEmail: string) => {
@@ -141,6 +142,30 @@ useEffect(() => {
 
         <form onSubmit={handleShare} className="p-6 border-b border-white/10">
           <div className="space-y-4">
+            {infoBox && (
+              <div
+                className={`rounded-xl px-4 py-3 mb-2 flex items-center gap-3 shadow-lg border text-sm font-medium ${
+                  infoBox.type === 'error'
+                    ? 'bg-gradient-to-r from-red-600/80 to-pink-500/80 border-red-400/40 text-white'
+                    : 'bg-gradient-to-r from-blue-600/80 to-cyan-500/80 border-blue-400/40 text-white'
+                } animate-in fade-in`}
+              >
+                {infoBox.type === 'error' ? (
+                  <X size={18} className="text-white/80" />
+                ) : (
+                  <Mail size={18} className="text-white/80" />
+                )}
+                <span>{infoBox.message}</span>
+                <button
+                  type="button"
+                  className="ml-auto text-white/60 hover:text-white/90"
+                  onClick={() => setInfoBox(null)}
+                  aria-label="Close"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            )}
             <div className="relative">
               <label className="text-sm font-medium text-gray-300 mb-2 block">
                 Email Address
@@ -254,33 +279,34 @@ useEffect(() => {
               {shares.map((share) => (
                 <div
                   key={share.id}
-                  className="flex items-center justify-between p-3 bg-white/5 rounded-lg hover:bg-white/10 transition-colors"
+                  className="flex items-center justify-between p-4 bg-gradient-to-br from-blue-900/60 to-indigo-800/60 border border-blue-500/20 rounded-2xl shadow-lg hover:shadow-xl hover:scale-[1.02] transition-all group"
                 >
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-white truncate">
+                    <p className="text-base font-semibold text-white truncate flex items-center gap-2">
+                      <Mail size={16} className="text-blue-300" />
                       {share.shared_with_email}
                     </p>
-                    <p className="text-xs text-gray-500">
-                      {new Date(share.created_at || '').toLocaleDateString()}
+                    <p className="text-xs text-gray-400 mt-1">
+                      Shared on {new Date(share.created_at || '').toLocaleDateString()}
                     </p>
                   </div>
-                  
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-3">
                     <select
                       value={share.permission}
                       onChange={(e) => handleUpdatePermission(share.id, e.target.value as 'viewer' | 'editor')}
-                      className="px-2 py-1 bg-white/10 border border-white/20 rounded text-xs text-white focus:outline-none focus:border-blue-500"
+                      className="px-3 py-2 bg-blue-500/10 border border-blue-400/30 rounded-lg text-xs text-white font-semibold focus:outline-none focus:border-blue-500 shadow-sm hover:bg-blue-500/20 transition-all"
+                      disabled={updatingShareId === share.id}
                     >
                       <option value="viewer">Viewer</option>
                       <option value="editor">Editor</option>
                     </select>
-                    
                     <button
                       onClick={() => handleRemoveShare(share.id, share.shared_with_email)}
-                      className="w-7 h-7 rounded hover:bg-red-500/20 flex items-center justify-center transition-colors"
+                      className="w-8 h-8 rounded-full bg-red-500/10 hover:bg-red-500/30 flex items-center justify-center transition-all shadow hover:shadow-red-500/30"
                       title="Remove access"
+                      disabled={updatingShareId === share.id}
                     >
-                      <Trash2 size={14} className="text-red-400" />
+                      <Trash2 size={16} className="text-red-400" />
                     </button>
                   </div>
                 </div>
