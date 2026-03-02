@@ -319,6 +319,7 @@ export default function DashboardPage() {
   const [isLoaded, setIsLoaded] = useState(false);
   const [showAIAssistant, setShowAIAssistant] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
+  const userIdRef = useRef<string | null>(null);
   const [isLoadingData, setIsLoadingData] = useState(true);
   const [currentProjectPermission, setCurrentProjectPermission] = useState<'owner' | 'viewer' | 'editor'>('owner');
   const widgetsRef = useRef<WidgetPosition[]>([]);
@@ -346,6 +347,7 @@ const [aiLimit, setAiLimit] = useState({ allowed: true, remaining: 10, resetTime
 
   useEffect(() => {
   if (!selectedProjectId || selectedProjectId === 'guest-1') return;
+  if (!userId) return; // ✅ Prevent getWidgets before auth
 
   const channel = supabase
     .channel(`project-${selectedProjectId}`)
@@ -359,20 +361,17 @@ const [aiLimit, setAiLimit] = useState({ allowed: true, remaining: 10, resetTime
       },
       async (payload) => {
         console.log('🔄 Widget change detected:', payload);
-        
         // ✅ DON'T reload if we're actively editing (have temp widgets)
         const hasTempWidgets = widgetsRef.current.some(w => w.id.startsWith('temp-'));
         if (hasTempWidgets) {
           console.log('⏸️ Skipping reload - temp widgets exist');
           return;
         }
-        
         // ✅ DON'T reload if we just saved (prevent loop)
         if (isSavingRef.current) {
           console.log('⏸️ Skipping reload - currently saving');
           return;
         }
-        
         // ✅ Only reload if change came from another user/session
         const dbWidgets = await getWidgets(selectedProjectId);
         const mappedWidgets = dbWidgets.map(w => ({
@@ -388,9 +387,12 @@ const [aiLimit, setAiLimit] = useState({ allowed: true, remaining: 10, resetTime
           dbId: w.id,
           _stableId: w.id,  // Use dbId as stable ID for widgets loaded from DB
         }));
-        
         console.log('✅ Reloaded widgets from realtime:', mappedWidgets.length);
+        isSavingRef.current = true; // ✅ Prevent save effect from firing
         setWidgets(mappedWidgets);
+        setTimeout(() => {
+          isSavingRef.current = false; // ✅ Re-enable after state update settles
+        }, 1000);
       }
     )
     .subscribe();
@@ -398,7 +400,7 @@ const [aiLimit, setAiLimit] = useState({ allowed: true, remaining: 10, resetTime
   return () => {
     supabase.removeChannel(channel);
   };
-}, [selectedProjectId]);
+}, [selectedProjectId, userId]); // ✅ Add userId to dependencies
 // Check user limits
 useEffect(() => {
   const checkLimits = async () => {
@@ -431,6 +433,10 @@ useEffect(() => {
   useEffect(() => {
     selectedProjectIdRef.current = selectedProjectId;
   }, [selectedProjectId]);
+
+  useEffect(() => {
+    userIdRef.current = userId;
+  }, [userId]);
 
   useEffect(() => {
   const initializeUser = async () => {
@@ -505,82 +511,105 @@ console.log('🔗 Shared projects loaded:', userSharedProjects);
 }, []);
 
   const saveToDatabase = useCallback(async (projectId: string, widgetsToSave: WidgetPosition[]) => {
-  if (!userId || projectId.startsWith('guest-')) return;
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (!uuidRegex.test(projectId)) return;
-  if (isSavingRef.current) return;
+    const currentUserId = userIdRef.current;
+    console.log('[saveToDatabase] called', { userId: currentUserId, projectId, widgetsToSave });
+    if (!currentUserId || projectId.startsWith('guest-')) {
+      console.log('[saveToDatabase] Skipping: no userId or guest project', { userId: currentUserId, projectId });
+      return;
+    }
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(projectId)) {
+      console.log('[saveToDatabase] Skipping: invalid projectId', { projectId });
+      return;
+    }
+    if (isSavingRef.current) {
+      console.log('[saveToDatabase] Skipping: already saving');
+      return;
+    }
 
-  isSavingRef.current = true;
-  const idMappings = new Map<string, string>(); // temp-id -> db-id
+    isSavingRef.current = true;
+    const idMappings = new Map<string, string>(); // temp-id -> db-id
 
-  try {
-    const existingWidgets = await getWidgets(projectId);
-    const existingDbIds = new Set(existingWidgets.map(w => w.id));
-    const updatedIds = new Set<string>();
+    try {
+      const existingWidgets = await getWidgets(projectId);
+      console.log('[saveToDatabase] existingWidgets', existingWidgets);
+      const existingDbIds = new Set(existingWidgets.map(w => w.id));
+      const updatedIds = new Set<string>();
 
-    for (const widget of widgetsToSave) {
-      const hasValidDbId = widget.dbId && !widget.dbId.startsWith('temp-') && existingDbIds.has(widget.dbId);
-      
-      if (hasValidDbId) {
-        // Update existing widget
-        await updateWidget(widget.dbId!, {
-          widget_type: widget.type, x: widget.x, y: widget.y, width: widget.width,
-          height: widget.height, z_index: widget.zIndex || 0, data: widget.data,
-        });
-        updatedIds.add(widget.dbId!);
-      } else if (widget.id && !widget.id.startsWith('temp-') && existingDbIds.has(widget.id)) {
-        // Update widget with existing DB ID
-        await updateWidget(widget.id, {
-          widget_type: widget.type, x: widget.x, y: widget.y, width: widget.width,
-          height: widget.height, z_index: widget.zIndex || 0, data: widget.data,
-        });
-        updatedIds.add(widget.id);
-      } else {
-        // Create new widget
-        const created = await createWidget(projectId, userId, {
-          widget_type: widget.type, x: widget.x, y: widget.y, width: widget.width,
-          height: widget.height, z_index: widget.zIndex || 0, data: widget.data,
-        });
-        if (created) {
-          updatedIds.add(created.id);
-          if (widget.id.startsWith('temp-')) {
-            idMappings.set(widget.id, created.id);
+      for (const widget of widgetsToSave) {
+        const hasValidDbId = widget.dbId && !widget.dbId.startsWith('temp-') && existingDbIds.has(widget.dbId);
+        console.log('[saveToDatabase] Processing widget', widget, { hasValidDbId });
+        if (hasValidDbId) {
+          // Update existing widget
+          await updateWidget(widget.dbId!, {
+            widget_type: widget.type, x: widget.x, y: widget.y, width: widget.width,
+            height: widget.height, z_index: widget.zIndex || 0, data: widget.data,
+          });
+          updatedIds.add(widget.dbId!);
+          console.log('[saveToDatabase] Updated widget', widget.dbId);
+        } else if (widget.id && !widget.id.startsWith('temp-') && existingDbIds.has(widget.id)) {
+          // Update widget with existing DB ID
+          await updateWidget(widget.id, {
+            widget_type: widget.type, x: widget.x, y: widget.y, width: widget.width,
+            height: widget.height, z_index: widget.zIndex || 0, data: widget.data,
+          });
+          updatedIds.add(widget.id);
+          console.log('[saveToDatabase] Updated widget by id', widget.id);
+        } else {
+          // Create new widget
+          const created = await createWidget(projectId, currentUserId, {
+            widget_type: widget.type, x: widget.x, y: widget.y, width: widget.width,
+            height: widget.height, z_index: widget.zIndex || 0, data: widget.data,
+          });
+          if (created) {
+            updatedIds.add(created.id);
+            if (widget.id.startsWith('temp-')) {
+              idMappings.set(widget.id, created.id);
+            }
+            console.log('[saveToDatabase] Created widget', created);
+          } else {
+            console.warn('[saveToDatabase] Failed to create widget', widget);
           }
         }
       }
-    }
 
-    // Update state with new DB IDs for created widgets
-    if (idMappings.size > 0) {
-      setWidgets(prev => prev.map(w => {
-        const newId = idMappings.get(w.id);
-        return newId ? { ...w, id: newId, dbId: newId } : w;
-      }));
-    }
-
-    // Delete widgets that no longer exist
-    for (const existingWidget of existingWidgets) {
-      if (!updatedIds.has(existingWidget.id)) {
-        await dbDeleteWidget(existingWidget.id);
+      // Update state with new DB IDs for created widgets
+      if (idMappings.size > 0) {
+        setWidgets(prev => prev.map(w => {
+          const newId = idMappings.get(w.id);
+          return newId ? { ...w, id: newId, dbId: newId } : w;
+        }));
+        console.log('[saveToDatabase] Updated widget IDs in state', Array.from(idMappings.entries()));
       }
+
+      // Delete widgets that no longer exist
+      for (const existingWidget of existingWidgets) {
+        if (!updatedIds.has(existingWidget.id)) {
+          await dbDeleteWidget(existingWidget.id);
+          console.log('[saveToDatabase] Deleted widget', existingWidget.id);
+        }
+      }
+      console.log('[saveToDatabase] Save complete');
+    } catch (error) {
+      console.error('[saveToDatabase] Save error:', error);
+    } finally {
+      isSavingRef.current = false;
+      console.log('[saveToDatabase] isSavingRef reset');
     }
-  } catch (error) {
-    console.error('Save error:', error);
-  } finally {
-    isSavingRef.current = false;
-  }
-}, [userId]);
+  }, []);
 
 const scheduleSave = useCallback(() => {
   if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
   saveTimeoutRef.current = setTimeout(() => {
+    console.log('[scheduleSave] Triggered saveToDatabase');
     saveToDatabase(selectedProjectIdRef.current, widgetsRef.current);
   }, 500);
 }, []);
 // ✅ ADD THIS - Force save before page unload
 useEffect(() => {
   const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-    if (userId && selectedProjectIdRef.current && widgetsRef.current.length > 0) {
+    if (!userIdRef.current) return; // ✅ ADD THIS
+    if (selectedProjectIdRef.current && widgetsRef.current.length > 0) {
       // Cancel scheduled save
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
@@ -598,6 +627,7 @@ useEffect(() => {
 }, [userId, saveToDatabase]);
 
  useEffect(() => {
+  console.log('[save effect] widgets changed', { isLoaded, userId, widgets, selectedProjectId });
   if (isLoaded && userId && widgets.length > 0 && !selectedProjectId.startsWith('guest-')) {
     scheduleSave();
   }
@@ -606,7 +636,9 @@ useEffect(() => {
 const handleProjectSelect = async (projectId: string, projectName: string) => {
   // Save current project before switching
   if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-  await saveToDatabase(selectedProjectIdRef.current, widgetsRef.current);
+  if (userIdRef.current) {
+    await saveToDatabase(selectedProjectIdRef.current, widgetsRef.current);
+  }
 
   setSelectedProjectId(projectId);
   setSelectedProjectName(projectName);
@@ -842,11 +874,8 @@ const addWidget = useCallback((type: string) => {
     return updated;
   });
   
-  // Schedule save after adding widget - use direct setTimeout instead of scheduleSave
-  if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-  saveTimeoutRef.current = setTimeout(() => {
-    saveToDatabase(selectedProjectIdRef.current, widgetsRef.current);
-  }, 500);
+  // Schedule save after adding widget
+  scheduleSave();
 }, [currentProjectPermission]);
  const deleteWidget = useCallback((id: string) => {
   // Check permission
@@ -873,11 +902,8 @@ const addWidget = useCallback((type: string) => {
     }
   }
   
-  // Schedule save for remaining widgets - use direct setTimeout instead of scheduleSave
-  if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-  saveTimeoutRef.current = setTimeout(() => {
-    saveToDatabase(selectedProjectIdRef.current, widgetsRef.current);
-  }, 500);
+  // Schedule save for remaining widgets
+  scheduleSave();
 }, [currentProjectPermission]);
 
   const duplicateWidget = useCallback((id: string) => {
@@ -903,11 +929,8 @@ const addWidget = useCallback((type: string) => {
       return updated;
     });
     
-    // Schedule save after duplicate - use direct setTimeout instead of scheduleSave
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    saveTimeoutRef.current = setTimeout(() => {
-      saveToDatabase(selectedProjectIdRef.current, widgetsRef.current);
-    }, 500);
+    // Schedule save after duplicate
+    scheduleSave();
   }, [currentProjectPermission]);
 
   const updateWidgetPosition = useCallback((id: string, x: number, y: number) => {

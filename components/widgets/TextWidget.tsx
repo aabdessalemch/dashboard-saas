@@ -37,6 +37,7 @@ export default function TextWidget({
   const [isFocused, setIsFocused] = useState(false);
   const [showToolbar, setShowToolbar] = useState(false);
   const [toolbarPosition, setToolbarPosition] = useState<'top' | 'bottom'>('top');
+  const [toolbarOffset, setToolbarOffset] = useState<number>(0);
   const [boxBgColor, setBoxBgColor] = useState(initialData?.bgColor || 'rgba(30, 41, 59, 0.8)');
   const [isInitialized, setIsInitialized] = useState(false);
   const [isBoldActive, setIsBoldActive] = useState(false);
@@ -106,23 +107,30 @@ export default function TextWidget({
     if (onBringToFront) {
       onBringToFront();
     }
-    
     setIsFocused(true);
     setShowToolbar(true);
-    
+
     if (containerRef.current) {
       const rect = containerRef.current.getBoundingClientRect();
       const toolbarHeight = 60;
+      const margin = 8;
       const spaceBelow = window.innerHeight - rect.bottom;
       const spaceAbove = rect.top;
-      
-      if (spaceBelow < 100 && spaceAbove > toolbarHeight + 20) {
-        setToolbarPosition('top');
+      let position: 'top' | 'bottom' = 'bottom';
+      let offset = 0;
+      if (spaceBelow < toolbarHeight + margin && spaceAbove > toolbarHeight + margin) {
+        position = 'top';
+        // If not enough space above, clamp to top
+        offset = Math.min(rect.top - margin, toolbarHeight + margin);
       } else {
-        setToolbarPosition('bottom');
+        position = 'bottom';
+        // If not enough space below, clamp to bottom
+        offset = Math.min(spaceBelow - margin, toolbarHeight + margin);
       }
+      setToolbarPosition(position);
+      setToolbarOffset(offset);
     }
-    
+
     if (editorRef.current) {
       const currentContent = editorRef.current.innerHTML;
       if (currentContent === '<span style="color: rgba(255,255,255,0.4)">Click to add text...</span>') {
@@ -397,8 +405,13 @@ export default function TextWidget({
 
       {showToolbar && (
         <div
-          className={`absolute ${toolbarPosition === 'top' ? '-top-30' : '-bottom-30'} left-0 bg-slate-900 border border-white/30 rounded-lg shadow-xl px-2 py-1.5 flex items-center gap-2 flex-wrap`}
-          style={{ zIndex: 10, maxWidth: `${width}px` }}
+          className="absolute left-0 bg-slate-900 border border-white/30 rounded-lg shadow-xl px-2 py-1.5 flex items-center gap-2 flex-wrap"
+          style={{
+            zIndex: 99999,
+            maxWidth: `${width}px`,
+            top: toolbarPosition === 'top' ? `-${60 + toolbarOffset}px` : undefined,
+            bottom: toolbarPosition === 'bottom' ? `-${60 + toolbarOffset}px` : undefined,
+          }}
           onMouseDown={(e) => {
             e.stopPropagation();
             e.preventDefault();

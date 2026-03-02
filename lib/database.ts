@@ -52,26 +52,31 @@ export async function getProjects(userId: string): Promise<Project[]> {
 
 export async function getSharedProjects(userId: string): Promise<(Project & { permission: 'viewer' | 'editor'; owner_email: string })[]> {
   try {
+    console.log('🔍 getSharedProjects called with userId:', userId);
     // Get user's email first
-    const { data: profile } = await supabase
+    const { data: profile, error: profileError } = await supabase
       .from('profiles')
       .select('email')
       .eq('id', userId)
       .single();
 
-    if (!profile?.email) {
-      console.log('No profile email found for user');
+    console.log('🔍 profile result:', { profile, profileError });
+
+    if (profileError || !profile?.email) {
+      console.log('Profile not found or error:', profileError?.message);
       return [];
     }
 
     // Get shares by BOTH user ID and email (belt and suspenders approach)
-    const { data: shares, error } = await supabase
+    const { data: shares, error: sharesError } = await supabase
       .from('project_shares')
       .select('*')
       .or(`shared_with_id.eq.${userId},shared_with_email.ilike.${profile.email}`);
 
-    if (error) {
-      console.error('Error fetching shares:', error);
+    console.log('🔍 shares result:', { shares, sharesError });
+
+    if (sharesError) {
+      console.error('Error fetching shares:', sharesError);
       return [];
     }
 
@@ -85,6 +90,8 @@ export async function getSharedProjects(userId: string): Promise<(Project & { pe
       .from('projects')
       .select('*')
       .in('id', projectIds);
+
+    console.log('🔍 projects result:', { projects, projectsError });
 
     if (projectsError) {
       console.error('Error fetching projects:', projectsError);
@@ -357,11 +364,13 @@ export async function getUserSubscription(userId: string) {
       .eq('id', userId)
       .single();
 
+    console.log('💳 getUserSubscription result:', { data, error }); // ADD THIS
     if (error) {
+      console.log('💳 getUserSubscription error code:', error.code); // ADD THIS
       console.error('Error fetching subscription:', error);
       
       if (error.code === 'PGRST116') {
-        const { data: newProfile } = await supabase
+        const { data: newProfile, error: insertError } = await supabase
           .from('profiles')
           .insert([{ 
             id: userId, 
@@ -371,7 +380,7 @@ export async function getUserSubscription(userId: string) {
           }])
           .select()
           .single();
-        
+        console.log('💳 profile insert result:', { newProfile, insertError });
         return newProfile;
       }
       
