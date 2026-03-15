@@ -5,6 +5,7 @@ import { X } from "lucide-react";
 import WidgetEditMenu from "./WidgetEditMenu";
 import DataEditorModal from "./DataEditorModal";
 import ChartSettingsModal from "./ChartSettingsModal";
+import SPCPanel from "../SPCPanel";
 
 interface PieChartWidgetProps {
   onDelete?: () => void;
@@ -55,6 +56,7 @@ export default function PieChartWidget({
     animationDuration: 800
   });
 
+  const [showSPC, setShowSPC] = useState(false);
   const [showDataEditor, setShowDataEditor] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [modalKey, setModalKey] = useState(0);
@@ -261,6 +263,20 @@ export default function PieChartWidget({
             onSettings={() => setShowSettings(true)}
             isReadOnly={isReadOnly}
           />
+          <button
+            onClick={() => setShowSPC(!showSPC)}
+            className={`flex items-center gap-1.5 px-2.5 h-8 rounded-lg text-xs font-medium transition-all duration-200 ${
+              showSPC
+                ? 'bg-green-500/40 text-green-300'
+                : 'bg-green-500/20 hover:bg-green-500/40 text-green-400'
+            }`}
+            title="Analyze with SPC"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+            {showSPC ? 'Hide SPC' : 'Analyze with SPC'}
+          </button>
           {onDuplicate && !isReadOnly && (
             <button
               onClick={handleDuplicate}
@@ -384,6 +400,22 @@ export default function PieChartWidget({
         onSave={setSettings}
         isReadOnly={isReadOnly}
       />
+
+      {showSPC && (
+        <div style={{
+          position: 'absolute',
+          top: `${position.y + chartHeight + 60}px`,
+          left: `${position.x}px`,
+          width: `${chartWidth}px`,
+          zIndex: zIndex + 1
+        }}>
+          <SPCPanel
+            data={data}
+            chartType="pie"
+            onClose={() => setShowSPC(false)}
+          />
+        </div>
+      )}
     </>
   );
 }
