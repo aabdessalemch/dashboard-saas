@@ -2,13 +2,14 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceLine, AreaChart, Area, BarChart, Bar, Cell,
+  ResponsiveContainer, ReferenceLine, ReferenceArea, AreaChart, Area, BarChart, Bar, Cell, Scatter,
 } from "recharts";
-import { X } from "lucide-react";
+import { X, Eye, EyeOff } from "lucide-react";
 import {
   calculateSPCStats, runAllNelsonRules, calculateCapability,
-  detectSPCChartType,
+  detectSPCChartType, calculateForecast,
   type SPCStats, type NelsonRulesResult, type RuleResult, type CapabilityResult,
+  type ForecastResult,
 } from "@/lib/spcUtils";
 
 // ─── Props ───────────────────────────────────────────────────────────────────
@@ -77,10 +78,18 @@ function fallbackInsight(stats: SPCStats, rulesResult: NelsonRulesResult): strin
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function SPCPanel({ data, chartType, onClose, initialLimits, onLimitsChange }: SPCPanelProps) {
-  const [activeTab, setActiveTab] = useState<'sideBySide' | 'allRules' | 'cpk'>('sideBySide');
+  const [activeTab, setActiveTab] = useState<'sideBySide' | 'allRules' | 'cpk' | 'premortem'>('sideBySide');
   const [aiInsight, setAiInsight] = useState<string>('');
   const [loadingInsight, setLoadingInsight] = useState(false);
   const [expandedRule, setExpandedRule] = useState<number | null>(null);
+
+  // ── Premortem state ──
+  const [showPremortem, setShowPremortem] = useState(false);
+  const [forecastHorizon, setForecastHorizon] = useState(7);
+  const [confidenceLevel, setConfidenceLevel] = useState<80 | 95>(95);
+  const [premortInsight, setPremortInsight] = useState<string>('');
+  const [loadingPremort, setLoadingPremort] = useState(false);
+  const premortLoadedRef = useRef(false);
 
   const ruleExplanations: Record<number, string> = {
     1: 'A single data point falls outside the Upper or Lower Control Limit (beyond 3σ from the mean). This is the strongest signal that something unusual happened — such as equipment failure, wrong raw material, or a measurement error. Immediate investigation is required.',
@@ -272,11 +281,88 @@ export default function SPCPanel({ data, chartType, onClose, initialLimits, onLi
 
   const healthColor = rulesResult.healthScore >= 75 ? 'bg-green-500' : rulesResult.healthScore >= 50 ? 'bg-amber-500' : 'bg-red-500';
 
+  // ── Premortem: forecast result ──
+  const confidenceZ = confidenceLevel === 95 ? 1.96 : 1.28;
+  const forecastResult = useMemo<ForecastResult | null>(() => {
+    if (data.length < 10) return null; // not enough data
+    return calculateForecast(values, labels, adjustedStats, forecastHorizon, confidenceZ);
+  }, [values, labels, adjustedStats, forecastHorizon, confidenceZ, data.length]);
+
+  // ── Premortem: merged dataset (historical + forecast) ──
+  const mergedDataset = useMemo(() => {
+    if (!forecastResult) return [];
+    // Historical points
+    const hist = data.map(d => ({
+      name: d.name,
+      historical: d.value,
+      forecast: null as number | null,
+      upperBand: null as number | null,
+      lowerBand: null as number | null,
+      willBreach: false,
+      isEarlyWarning: false,
+      isForecast: false,
+    }));
+    // Bridge: last historical point becomes first forecast point too
+    if (hist.length > 0) {
+      const last = hist[hist.length - 1];
+      last.forecast = last.historical;
+    }
+    // Forecast points
+    const fc = forecastResult.points.map(p => ({
+      name: p.name,
+      historical: null as number | null,
+      forecast: p.value,
+      upperBand: p.upperBand,
+      lowerBand: p.lowerBand,
+      willBreach: p.willBreach,
+      isEarlyWarning: p.isEarlyWarning,
+      isForecast: true,
+    }));
+    return [...hist, ...fc];
+  }, [data, forecastResult]);
+
+  // ── Premortem: Gemini insight (fetch once when tab first opens) ──
+  useEffect(() => {
+    if (activeTab !== 'premortem' || premortLoadedRef.current || !forecastResult) return;
+    premortLoadedRef.current = true;
+    setLoadingPremort(true);
+
+    const prompt = `You are an SPC Premortem analyst. A linear regression forecast has been run on ${data.length} data points.
+
+Forecast summary:
+- Slope: ${forecastResult.slope.toFixed(4)} per period
+- Predicted breaches: ${forecastResult.breachCount} of ${forecastResult.points.length} forecast points
+- First breach: ${forecastResult.firstBreachLabel ?? 'none'} (${forecastResult.firstBreachDirection ?? 'n/a'})
+- Current mean: ${stats.mean.toFixed(1)}, sigma: ${stats.sigma.toFixed(1)}
+- USL: ${usl.toFixed(1)}, LSL: ${lsl.toFixed(1)}
+- Confidence level: ${confidenceLevel}%
+
+Write 2-3 sentences of actionable premortem analysis. What should the team watch out for? What interventions might prevent the predicted breach? Be specific and avoid generic advice. Do not start with "I" or "The analysis".`.trim();
+
+    fetch('/api/spc-insight', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    })
+      .then(res => res.ok ? res.json() : null)
+      .then(json => setPremortInsight(json?.insight ?? premortFallback(forecastResult)))
+      .catch(() => setPremortInsight(premortFallback(forecastResult)))
+      .finally(() => setLoadingPremort(false));
+  }, [activeTab, forecastResult, data.length, stats, usl, lsl, confidenceLevel]);
+
+  function premortFallback(fr: ForecastResult): string {
+    if (fr.allGreen) {
+      return `The forecast projects all ${fr.points.length} future points within control limits. The process trend appears stable — continue monitoring, but no immediate intervention is needed.`;
+    }
+    return `The forecast predicts ${fr.breachCount} breach${fr.breachCount > 1 ? 'es' : ''}, with the first at ${fr.firstBreachLabel} (${fr.firstBreachDirection} the limit). A slope of ${fr.slope.toFixed(4)} per period suggests gradual drift — consider preemptive calibration or process adjustment.`;
+  }
+
   // ── Tabs ──
   const tabs: { key: typeof activeTab; label: string }[] = [
     { key: 'sideBySide', label: 'Side by side' },
     { key: 'allRules', label: 'All 7 rules' },
     { key: 'cpk', label: 'Cp / Cpk' },
+    ...(data.length >= 10 ? [{ key: 'premortem' as const, label: 'Premortem' }] : []),
   ];
 
   return (
@@ -303,18 +389,35 @@ export default function SPCPanel({ data, chartType, onClose, initialLimits, onLi
       )}
 
       {/* ── Tab bar ── */}
-      <div className="flex gap-1 mb-5 bg-white/5 rounded-xl p-1">
-        {tabs.map(t => (
+      <div className="flex items-center gap-2 mb-5">
+        <div className="flex gap-1 flex-1 bg-white/5 rounded-xl p-1">
+          {tabs.map(t => (
+            <button
+              key={t.key}
+              onClick={() => setActiveTab(t.key)}
+              className={`flex-1 text-xs font-medium py-2 rounded-lg transition-all ${
+                activeTab === t.key ? 'bg-white/15 text-white' : 'text-white/50 hover:text-white/80'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        {/* Premortem overlay toggle */}
+        {data.length >= 10 && (
           <button
-            key={t.key}
-            onClick={() => setActiveTab(t.key)}
-            className={`flex-1 text-xs font-medium py-2 rounded-lg transition-all ${
-              activeTab === t.key ? 'bg-white/15 text-white' : 'text-white/50 hover:text-white/80'
+            onClick={() => setShowPremortem(!showPremortem)}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition-all border ${
+              showPremortem
+                ? 'bg-violet-500/20 border-violet-400/30 text-violet-300'
+                : 'bg-white/5 border-white/10 text-white/40 hover:text-white/70 hover:bg-white/10'
             }`}
+            title={showPremortem ? 'Hide forecast overlay' : 'Show forecast overlay'}
           >
-            {t.label}
+            {showPremortem ? <Eye size={13} /> : <EyeOff size={13} />}
+            <span className="hidden sm:inline">Forecast</span>
           </button>
-        ))}
+        )}
       </div>
 
       {/* ════════════════ TAB 1 — Side by side ════════════════ */}
@@ -358,23 +461,48 @@ export default function SPCPanel({ data, chartType, onClose, initialLimits, onLi
               </ResponsiveContainer>
             </div>
 
-            {/* SPC control chart */}
+            {/* SPC control chart (with optional forecast overlay) */}
             <div className="bg-white/5 rounded-xl p-3">
-              <p className="text-white/50 text-[10px] uppercase tracking-wider mb-2">SPC control chart (I-MR)</p>
+              <p className="text-white/50 text-[10px] uppercase tracking-wider mb-2">
+                SPC control chart (I-MR){showPremortem && forecastResult ? ' + forecast' : ''}
+              </p>
               <ResponsiveContainer width="100%" height={180}>
-                <ComposedChart data={data} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
+                <ComposedChart
+                  data={showPremortem && forecastResult ? mergedDataset : data}
+                  margin={{ top: 5, right: 10, bottom: 5, left: 0 }}
+                >
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                   <XAxis dataKey="name" stroke="rgba(255,255,255,0.35)" tick={{ fontSize: 10 }} />
                   <YAxis stroke="rgba(255,255,255,0.35)" tick={{ fontSize: 10 }} tickFormatter={formatStat} />
                   <Tooltip
                     contentStyle={{ backgroundColor: 'rgba(0,0,0,0.85)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', fontSize: 11 }}
                     labelStyle={{ color: '#fff' }}
-                    formatter={(val: number) => [formatStat(val), 'Value']}
+                    formatter={(val: number | null, name: string) => {
+                      if (val == null) return ['-', name];
+                      return [formatStat(val), name === 'forecast' ? 'Forecast' : name === 'historical' ? 'Actual' : 'Value'];
+                    }}
                   />
                   <ReferenceLine y={usl} stroke="#f87171" strokeDasharray="4 3" label={{ value: 'UCL', fill: '#f87171', fontSize: 10, position: 'right' }} />
                   <ReferenceLine y={stats.mean} stroke="#97C459" strokeDasharray="4 3" label={{ value: 'CL', fill: '#97C459', fontSize: 10, position: 'right' }} />
                   <ReferenceLine y={lsl} stroke="#60a5fa" strokeDasharray="4 3" label={{ value: 'LCL', fill: '#60a5fa', fontSize: 10, position: 'right' }} />
-                  <Line type="monotone" dataKey="value" stroke="#f59e0b" strokeWidth={2} dot={renderSPCDot} activeDot={false} />
+
+                  {/* When forecast overlay is ON, show "Now" separator and forecast elements */}
+                  {showPremortem && forecastResult && data.length > 0 && (
+                    <ReferenceLine
+                      x={data[data.length - 1].name}
+                      stroke="rgba(255,255,255,0.2)"
+                      strokeDasharray="3 3"
+                    />
+                  )}
+
+                  {showPremortem && forecastResult ? (
+                    <>
+                      <Line type="monotone" dataKey="historical" stroke="#f59e0b" strokeWidth={2} dot={renderSPCDot} activeDot={false} connectNulls={false} isAnimationActive={false} />
+                      <Line type="monotone" dataKey="forecast" stroke="#c4b5fd" strokeWidth={2} strokeDasharray="6 3" dot={false} connectNulls={false} isAnimationActive={false} />
+                    </>
+                  ) : (
+                    <Line type="monotone" dataKey="value" stroke="#f59e0b" strokeWidth={2} dot={renderSPCDot} activeDot={false} />
+                  )}
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
@@ -580,6 +708,243 @@ export default function SPCPanel({ data, chartType, onClose, initialLimits, onLi
               </ResponsiveContainer>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ════════════════ TAB 4 — Premortem ════════════════ */}
+      {activeTab === 'premortem' && forecastResult && (
+        <div>
+          {/* Low data warning */}
+          {data.length < 20 && data.length >= 10 && (
+            <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3 mb-4 text-amber-300 text-xs">
+              <strong>Limited data for forecast:</strong> Predictions are more reliable with 20+ data points.
+              Results with {data.length} points are indicative only.
+            </div>
+          )}
+
+          {/* Controls bar */}
+          <div className="flex items-center gap-4 mb-5 bg-white/5 rounded-xl px-4 py-3">
+            {/* Horizon selector */}
+            <div className="flex items-center gap-2">
+              <span className="text-white/40 text-[10px] uppercase tracking-wider">Horizon</span>
+              <div className="flex gap-1">
+                {[5, 7, 10].map(h => (
+                  <button
+                    key={h}
+                    onClick={() => { setForecastHorizon(h); premortLoadedRef.current = false; }}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+                      forecastHorizon === h
+                        ? 'bg-violet-500/25 text-violet-300 border border-violet-400/30'
+                        : 'bg-white/5 text-white/40 hover:text-white/70 border border-transparent'
+                    }`}
+                  >
+                    {h}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* Confidence selector */}
+            <div className="flex items-center gap-2">
+              <span className="text-white/40 text-[10px] uppercase tracking-wider">Confidence</span>
+              <div className="flex gap-1">
+                {([80, 95] as const).map(c => (
+                  <button
+                    key={c}
+                    onClick={() => { setConfidenceLevel(c); premortLoadedRef.current = false; }}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+                      confidenceLevel === c
+                        ? 'bg-violet-500/25 text-violet-300 border border-violet-400/30'
+                        : 'bg-white/5 text-white/40 hover:text-white/70 border border-transparent'
+                    }`}
+                  >
+                    {c}%
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* ── Forecast chart ── */}
+          <div className="bg-white/5 rounded-xl p-3 mb-5">
+            <p className="text-white/50 text-[10px] uppercase tracking-wider mb-2">
+              Forecast — {forecastHorizon} periods ahead ({confidenceLevel}% CI)
+            </p>
+            <ResponsiveContainer width="100%" height={240}>
+              <ComposedChart data={mergedDataset} margin={{ top: 10, right: 15, bottom: 5, left: 0 }}>
+                <defs>
+                  <linearGradient id="premortBandGreen" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="rgba(99,153,34,0.12)" />
+                    <stop offset="100%" stopColor="rgba(99,153,34,0.02)" />
+                  </linearGradient>
+                  <linearGradient id="premortBandRed" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="rgba(248,113,113,0.12)" />
+                    <stop offset="100%" stopColor="rgba(248,113,113,0.02)" />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                <XAxis dataKey="name" stroke="rgba(255,255,255,0.35)" tick={{ fontSize: 9 }} />
+                <YAxis stroke="rgba(255,255,255,0.35)" tick={{ fontSize: 10 }} tickFormatter={formatStat} />
+                <Tooltip
+                  contentStyle={{ backgroundColor: 'rgba(0,0,0,0.85)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', fontSize: 11 }}
+                  labelStyle={{ color: '#fff' }}
+                  formatter={(val: number | null, name: string) => {
+                    if (val == null) return ['-', name];
+                    return [formatStat(val), name === 'forecast' ? 'Forecast' : name === 'historical' ? 'Actual' : name];
+                  }}
+                />
+
+                {/* Premortem zone shading */}
+                {mergedDataset.length > 0 && data.length > 0 && (
+                  <ReferenceArea
+                    x1={mergedDataset[data.length - 1]?.name}
+                    x2={mergedDataset[mergedDataset.length - 1]?.name}
+                    fill="rgba(139,92,246,0.04)"
+                    fillOpacity={1}
+                  />
+                )}
+
+                {/* Confidence band — upper */}
+                <Area
+                  type="monotone"
+                  dataKey="upperBand"
+                  stroke="none"
+                  fill={forecastResult.allGreen ? "url(#premortBandGreen)" : "url(#premortBandRed)"}
+                  fillOpacity={0.08}
+                  connectNulls={false}
+                  isAnimationActive={false}
+                />
+                {/* Confidence band — lower */}
+                <Area
+                  type="monotone"
+                  dataKey="lowerBand"
+                  stroke="none"
+                  fill={forecastResult.allGreen ? "url(#premortBandGreen)" : "url(#premortBandRed)"}
+                  fillOpacity={0.08}
+                  connectNulls={false}
+                  isAnimationActive={false}
+                />
+
+                {/* Control lines */}
+                <ReferenceLine y={usl} stroke="#f87171" strokeDasharray="4 3" label={{ value: 'USL', fill: '#f87171', fontSize: 9, position: 'right' }} />
+                <ReferenceLine y={stats.mean} stroke="#97C459" strokeDasharray="4 3" label={{ value: 'CL', fill: '#97C459', fontSize: 9, position: 'right' }} />
+                <ReferenceLine y={lsl} stroke="#60a5fa" strokeDasharray="4 3" label={{ value: 'LSL', fill: '#60a5fa', fontSize: 9, position: 'right' }} />
+
+                {/* "Now" separator */}
+                {data.length > 0 && (
+                  <ReferenceLine
+                    x={data[data.length - 1].name}
+                    stroke="rgba(255,255,255,0.2)"
+                    strokeDasharray="3 3"
+                    label={{ value: 'Now', fill: 'rgba(255,255,255,0.4)', fontSize: 9, position: 'top' }}
+                  />
+                )}
+
+                {/* Historical line */}
+                <Line
+                  type="monotone"
+                  dataKey="historical"
+                  stroke="#f59e0b"
+                  strokeWidth={2}
+                  dot={{ r: 3, fill: '#f59e0b', stroke: 'none' }}
+                  connectNulls={false}
+                  isAnimationActive={false}
+                />
+
+                {/* Forecast line */}
+                <Line
+                  type="monotone"
+                  dataKey="forecast"
+                  stroke="#c4b5fd"
+                  strokeWidth={2}
+                  strokeDasharray="6 3"
+                  dot={false}
+                  connectNulls={false}
+                  isAnimationActive={false}
+                />
+
+                {/* Forecast dots — colored by risk */}
+                <Scatter
+                  dataKey="forecast"
+                  isAnimationActive={false}
+                  shape={(props: any) => {
+                    const { cx, cy, payload } = props;
+                    if (!payload?.isForecast || cx == null || cy == null) return null;
+                    let fill = 'rgba(99,153,34,0.6)';  // green
+                    if (payload.willBreach) fill = 'rgba(248,113,113,0.6)';  // red
+                    else if (payload.isEarlyWarning) fill = 'rgba(251,191,36,0.6)';  // amber
+                    return <circle cx={cx} cy={cy} r={5} fill={fill} stroke="rgba(255,255,255,0.15)" strokeWidth={1} />;
+                  }}
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* ── Summary cards 2×2 ── */}
+          <div className="grid grid-cols-2 gap-3 mb-5">
+            <div className="bg-white/5 rounded-xl p-3 overflow-hidden">
+              <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">Forecast trend</p>
+              <p className={`text-lg font-bold truncate ${forecastResult.slope > 0 ? 'text-amber-400' : forecastResult.slope < 0 ? 'text-blue-400' : 'text-white/60'}`}>
+                {forecastResult.slope > 0 ? '↑' : forecastResult.slope < 0 ? '↓' : '→'} {formatStat(Math.abs(forecastResult.slope))}/period
+              </p>
+            </div>
+            <div className="bg-white/5 rounded-xl p-3 overflow-hidden">
+              <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">Predicted breach</p>
+              <p className={`text-lg font-bold truncate ${forecastResult.allGreen ? 'text-green-400' : 'text-red-400'}`}>
+                {forecastResult.firstBreachLabel ?? 'None'}
+                {forecastResult.firstBreachDirection && (
+                  <span className="text-xs font-normal ml-1 text-white/40">({forecastResult.firstBreachDirection})</span>
+                )}
+              </p>
+            </div>
+            <div className="bg-white/5 rounded-xl p-3 overflow-hidden">
+              <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">Confidence band</p>
+              <p className="text-lg font-bold text-white truncate">{confidenceLevel}% CI</p>
+              <p className="text-[10px] text-white/30 truncate">z = {confidenceZ.toFixed(2)}</p>
+            </div>
+            <div className="bg-white/5 rounded-xl p-3 overflow-hidden">
+              <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">Points at risk</p>
+              <p className={`text-lg font-bold truncate ${forecastResult.breachCount > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                {forecastResult.breachCount} / {forecastResult.points.length}
+              </p>
+              <p className="text-[10px] text-white/30 truncate">
+                {forecastResult.points.filter(p => p.isEarlyWarning).length} early warnings
+              </p>
+            </div>
+          </div>
+
+          {/* ── Alert box ── */}
+          {forecastResult.allGreen ? (
+            <div className="bg-green-500/10 border border-green-500/20 rounded-xl px-4 py-3 mb-5 text-green-300 text-xs leading-relaxed flex items-start gap-2">
+              <span className="text-green-400 text-base mt-[-1px]">✓</span>
+              <span>
+                <strong>All clear.</strong> The forecast projects all {forecastResult.points.length} future points
+                within control limits. No predicted breaches at {confidenceLevel}% confidence — process appears on a stable trajectory.
+              </span>
+            </div>
+          ) : (
+            <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 mb-5 text-red-300 text-xs leading-relaxed flex items-start gap-2">
+              <span className="text-red-400 text-base mt-[-1px]">⚠</span>
+              <span>
+                <strong>Breach predicted.</strong> {forecastResult.breachCount} of {forecastResult.points.length} forecast
+                points exceed control limits. First expected breach at <strong>{forecastResult.firstBreachLabel}</strong> ({forecastResult.firstBreachDirection} the limit).
+                Preemptive action is recommended.
+              </span>
+            </div>
+          )}
+
+          {/* ── Gemini premortem analysis ── */}
+          <div>
+            <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">AI premortem analysis</p>
+            <div className="bg-white/5 rounded-xl p-3 text-white/70 text-xs leading-relaxed italic min-h-[40px]">
+              {loadingPremort ? (
+                <span className="text-white/30 animate-pulse">Generating premortem insight…</span>
+              ) : premortInsight ? (
+                premortInsight
+              ) : (
+                <span className="text-white/30">Premortem insight unavailable.</span>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

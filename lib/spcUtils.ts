@@ -369,3 +369,129 @@ export function calculateCapability(
 
   return { cp, cpk, cpu, cpl, sigmaLevel, ppm };
 }
+
+// ─── Forecast / Premortem ────────────────────────────────────────────────────
+
+export interface ForecastPoint {
+  name: string;
+  value: number;
+  upperBand: number;
+  lowerBand: number;
+  isForecast: true;
+  willBreach: boolean;
+  isEarlyWarning: boolean;
+}
+
+export interface ForecastResult {
+  points: ForecastPoint[];
+  slope: number;
+  intercept: number;
+  breachCount: number;
+  firstBreachLabel: string | null;
+  firstBreachDirection: 'above' | 'below' | null;
+  allGreen: boolean;
+}
+
+/**
+ * Linear-regression based forecast with confidence bands.
+ *
+ * @param values   – historical numeric values
+ * @param labels   – corresponding labels (e.g. "Wk1", "Wk2" …)
+ * @param stats    – SPC stats (mean, sigma, ucl, lcl, zones)
+ * @param horizon  – how many steps to forecast (default 7)
+ * @param confidenceZ – z-value for confidence band (1.96 = 95%, 1.28 = 80%)
+ */
+export function calculateForecast(
+  values: number[],
+  labels: string[],
+  stats: SPCStats,
+  horizon: number = 7,
+  confidenceZ: number = 1.96,
+): ForecastResult {
+  const n = values.length;
+
+  // ── Linear regression (least squares) ──
+  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+  for (let i = 0; i < n; i++) {
+    sumX += i;
+    sumY += values[i];
+    sumXY += i * values[i];
+    sumX2 += i * i;
+  }
+  const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX) || 0;
+  const intercept = (sumY - slope * sumX) / n || 0;
+
+  // Residual standard error
+  let ssRes = 0;
+  for (let i = 0; i < n; i++) {
+    const predicted = intercept + slope * i;
+    ssRes += (values[i] - predicted) ** 2;
+  }
+  const residualSE = n > 2 ? Math.sqrt(ssRes / (n - 2)) : stats.sigma;
+  const xMean = sumX / n;
+
+  // ── Generate forecast labels ──
+  // Try to detect "Wk12", "Week 12", "W12" pattern and increment
+  const lastLabel = labels[n - 1] ?? '';
+  const weekMatch = lastLabel.match(/^(Wk|Week|W)\s*(\d+)$/i);
+  function makeLabel(step: number): string {
+    if (weekMatch) {
+      const prefix = weekMatch[1];
+      const lastNum = parseInt(weekMatch[2], 10);
+      return `${prefix}${lastNum + step}`;
+    }
+    return `F+${step}`;
+  }
+
+  // ── Build forecast points ──
+  const points: ForecastPoint[] = [];
+  let firstBreachLabel: string | null = null;
+  let firstBreachDirection: 'above' | 'below' | null = null;
+  let breachCount = 0;
+
+  for (let step = 1; step <= horizon; step++) {
+    const x = n - 1 + step; // index relative to start of historical data
+    const predicted = intercept + slope * x;
+
+    // Prediction interval widens with distance from centroid
+    const hx = 1 / n + ((x - xMean) ** 2) / (sumX2 - n * xMean * xMean);
+    const bandWidth = confidenceZ * residualSE * Math.sqrt(1 + hx);
+    const upper = predicted + bandWidth;
+    const lower = predicted - bandWidth;
+
+    // Breach detection: does forecast exceed USL/LSL (stored as ucl/lcl in stats)?
+    const willBreach = predicted > stats.ucl || predicted < stats.lcl;
+    if (willBreach) {
+      breachCount++;
+      if (!firstBreachLabel) {
+        firstBreachLabel = makeLabel(step);
+        firstBreachDirection = predicted > stats.ucl ? 'above' : 'below';
+      }
+    }
+
+    // Nelson Rule 5 early warning: point in 2σ zone
+    const isEarlyWarning = !willBreach && (
+      predicted > stats.zone2Upper || predicted < stats.zone2Lower
+    );
+
+    points.push({
+      name: makeLabel(step),
+      value: predicted,
+      upperBand: upper,
+      lowerBand: lower,
+      isForecast: true,
+      willBreach,
+      isEarlyWarning,
+    });
+  }
+
+  return {
+    points,
+    slope,
+    intercept,
+    breachCount,
+    firstBreachLabel,
+    firstBreachDirection,
+    allGreen: breachCount === 0,
+  };
+}
