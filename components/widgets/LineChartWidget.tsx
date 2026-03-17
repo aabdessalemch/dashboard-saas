@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer } from "recharts";
 import { X, Check } from "lucide-react";
 import WidgetEditMenu from "./WidgetEditMenu";
@@ -65,6 +65,7 @@ export default function LineChartWidget({
   });
 
   const [showSPC, setShowSPC] = useState(false);
+  const [spcLimits, setSpcLimits] = useState<{ usl: number; lsl: number } | undefined>(initialData?.spcLimits);
   const [showDataEditor, setShowDataEditor] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [chartHeight, setChartHeight] = useState(initialHeight);
@@ -104,10 +105,19 @@ export default function LineChartWidget({
         title,
         data: newData,
         colors: newColors,
-        settings
+        settings,
+        spcLimits
       });
     }
   };
+
+  const handleSPCLimitsChange = useCallback((newUsl: number, newLsl: number) => {
+    const limits = { usl: newUsl, lsl: newLsl };
+    setSpcLimits(limits);
+    if (onDataChange) {
+      onDataChange({ title, data, colors: [lineColor], settings, spcLimits: limits });
+    }
+  }, [title, data, lineColor, settings, onDataChange]);
 
   const handleTitleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' || e.key === 'Escape') {
@@ -529,6 +539,8 @@ export default function LineChartWidget({
             data={data}
             chartType="line"
             onClose={() => setShowSPC(false)}
+            initialLimits={spcLimits}
+            onLimitsChange={handleSPCLimitsChange}
           />
         </div>
       )}

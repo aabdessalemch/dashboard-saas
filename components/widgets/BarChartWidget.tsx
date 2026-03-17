@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { X } from "lucide-react";
 import WidgetEditMenu from "./WidgetEditMenu";
@@ -58,6 +58,7 @@ export default function BarChartWidget({
   });
 
   const [showSPC, setShowSPC] = useState(false);
+  const [spcLimits, setSpcLimits] = useState<{ usl: number; lsl: number } | undefined>(initialData?.spcLimits);
   const [showDataEditor, setShowDataEditor] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [modalKey, setModalKey] = useState(0);
@@ -91,7 +92,8 @@ export default function BarChartWidget({
         title,
         data,
         colors,
-        settings
+        settings,
+        spcLimits
       });
     }
   };
@@ -104,10 +106,19 @@ export default function BarChartWidget({
         title,
         data: newData,
         colors: newColors,
-        settings
+        settings,
+        spcLimits
       });
     }
   };
+
+  const handleSPCLimitsChange = useCallback((newUsl: number, newLsl: number) => {
+    const limits = { usl: newUsl, lsl: newLsl };
+    setSpcLimits(limits);
+    if (onDataChange) {
+      onDataChange({ title, data, colors, settings, spcLimits: limits });
+    }
+  }, [title, data, colors, settings, onDataChange]);
 
   const handleOpenDataEditor = () => {
     setModalKey(prev => prev + 1);
@@ -482,6 +493,8 @@ const yAxisMax = Math.ceil(maxValue * 1.2);
             data={data}
             chartType="bar"
             onClose={() => setShowSPC(false)}
+            initialLimits={spcLimits}
+            onLimitsChange={handleSPCLimitsChange}
           />
         </div>
       )}

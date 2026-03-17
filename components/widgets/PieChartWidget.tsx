@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from "recharts";
 import { X } from "lucide-react";
 import WidgetEditMenu from "./WidgetEditMenu";
@@ -57,6 +57,7 @@ export default function PieChartWidget({
   });
 
   const [showSPC, setShowSPC] = useState(false);
+  const [spcLimits, setSpcLimits] = useState<{ usl: number; lsl: number } | undefined>(initialData?.spcLimits);
   const [showDataEditor, setShowDataEditor] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [modalKey, setModalKey] = useState(0);
@@ -89,10 +90,19 @@ export default function PieChartWidget({
         title,
         data: newData,
         colors: newColors,
-        settings
+        settings,
+        spcLimits
       });
     }
   };
+
+  const handleSPCLimitsChange = useCallback((newUsl: number, newLsl: number) => {
+    const limits = { usl: newUsl, lsl: newLsl };
+    setSpcLimits(limits);
+    if (onDataChange) {
+      onDataChange({ title, data, colors, settings, spcLimits: limits });
+    }
+  }, [title, data, colors, settings, onDataChange]);
 
   const handleOpenDataEditor = () => {
     setModalKey(prev => prev + 1);
@@ -413,6 +423,8 @@ export default function PieChartWidget({
             data={data}
             chartType="pie"
             onClose={() => setShowSPC(false)}
+            initialLimits={spcLimits}
+            onLimitsChange={handleSPCLimitsChange}
           />
         </div>
       )}

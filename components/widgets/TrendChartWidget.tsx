@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { X } from "lucide-react";
 import WidgetEditMenu from "./WidgetEditMenu";
@@ -108,6 +108,7 @@ export default function TrendChartWidget({
   });
 
   const [showSPC, setShowSPC] = useState(false);
+  const [spcLimits, setSpcLimits] = useState<{ usl: number; lsl: number } | undefined>(initialData?.spcLimits);
   const [showDataEditor, setShowDataEditor] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [chartHeight, setChartHeight] = useState(initialHeight);
@@ -156,7 +157,8 @@ export default function TrendChartWidget({
         title,
         data,
         colors,
-        settings
+        settings,
+        spcLimits
       });
     }
   };
@@ -170,10 +172,19 @@ export default function TrendChartWidget({
         title,
         data: sanitized,
         colors: [newColors[0]],
-        settings
+        settings,
+        spcLimits
       });
     }
   };
+
+  const handleSPCLimitsChange = useCallback((newUsl: number, newLsl: number) => {
+    const limits = { usl: newUsl, lsl: newLsl };
+    setSpcLimits(limits);
+    if (onDataChange) {
+      onDataChange({ title, data, colors, settings, spcLimits: limits });
+    }
+  }, [title, data, colors, settings, onDataChange]);
 
   const handleTitleBlur = () => {
     setIsEditingTitle(false);
@@ -466,6 +477,8 @@ export default function TrendChartWidget({
             data={data}
             chartType="trend"
             onClose={() => setShowSPC(false)}
+            initialLimits={spcLimits}
+            onLimitsChange={handleSPCLimitsChange}
           />
         </div>
       )}
