@@ -19,8 +19,8 @@ export async function POST(request: NextRequest) {
     const isAnthropicKey = apiKey.startsWith('sk-ant-');
 
     if (isGeminiKey) {
-      // Use gemini-2.0-flash directly instead of listing models
-      const modelName = 'models/gemini-2.0-flash';
+      // Use gemini-2.5-flash directly instead of listing models
+      const modelName = 'models/gemini-2.5-flash';
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/${modelName}:generateContent?key=${apiKey}`,
         {

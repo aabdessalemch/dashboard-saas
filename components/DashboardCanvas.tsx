@@ -19,6 +19,8 @@ interface DashboardCanvasProps {
   onUpdateData: (id: string, data: any) => void;
   onBringToFront?: (id: string) => void;
   permission?: 'owner' | 'editor' | 'viewer';
+  activeSPCWidget?: {id: string, config: any} | null;
+  onClearActiveSPC?: () => void;
 }
 
 export default function DashboardCanvas({ 
@@ -30,7 +32,9 @@ export default function DashboardCanvas({
   onUpdateSize,
   onUpdateData,
   onBringToFront,
-  permission = 'owner'
+  permission = 'owner',
+  activeSPCWidget,
+  onClearActiveSPC
 }: DashboardCanvasProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const [canvasWidth, setCanvasWidth] = useState(0);
@@ -63,6 +67,8 @@ export default function DashboardCanvas({
       initialData: widget.data,
       maxWidth: canvasWidth - 40,
       isReadOnly: permission === 'viewer',
+      spcTrigger: activeSPCWidget?.id === widget.id ? activeSPCWidget.config : null,
+      onSPCTriggered: activeSPCWidget?.id === widget.id ? onClearActiveSPC : undefined,
     };
 
     // Use _stableId as a consistent key that never changes during widget's lifetime

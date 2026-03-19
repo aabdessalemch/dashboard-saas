@@ -22,6 +22,8 @@ interface BarChartWidgetProps {
   maxWidth?: number;
   initialData?: any;
   isReadOnly?: boolean;
+  spcTrigger?: any;
+  onSPCTriggered?: () => void;
 }
 
 export default function BarChartWidget({ 
@@ -38,7 +40,9 @@ export default function BarChartWidget({
   initialZIndex = 1,
   maxWidth = 1200,
   initialData,
-  isReadOnly = false
+  isReadOnly = false,
+  spcTrigger,
+  onSPCTriggered
 }: BarChartWidgetProps) {
   const [title, setTitle] = useState(initialData?.title || "Bar Chart");
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -58,6 +62,15 @@ export default function BarChartWidget({
   });
 
   const [showSPC, setShowSPC] = useState(false);
+
+  // Auto-open SPC when triggered from chat
+  useEffect(() => {
+    if (spcTrigger) {
+      setShowSPC(true);
+      onSPCTriggered?.();
+    }
+  }, [spcTrigger]);
+
   const [spcLimits, setSpcLimits] = useState<{ usl: number; lsl: number } | undefined>(initialData?.spcLimits);
   const [showDataEditor, setShowDataEditor] = useState(false);
   const [showSettings, setShowSettings] = useState(false);

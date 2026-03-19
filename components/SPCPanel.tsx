@@ -284,7 +284,7 @@ export default function SPCPanel({ data, chartType, onClose, initialLimits, onLi
   // ── Premortem: forecast result ──
   const confidenceZ = confidenceLevel === 95 ? 1.96 : 1.28;
   const forecastResult = useMemo<ForecastResult | null>(() => {
-    if (data.length < 10) return null; // not enough data
+    if (data.length < 6) return null; // not enough data
     return calculateForecast(values, labels, adjustedStats, forecastHorizon, confidenceZ);
   }, [values, labels, adjustedStats, forecastHorizon, confidenceZ, data.length]);
 
@@ -362,7 +362,7 @@ Write 2-3 sentences of actionable premortem analysis. What should the team watch
     { key: 'sideBySide', label: 'Side by side' },
     { key: 'allRules', label: 'All 7 rules' },
     { key: 'cpk', label: 'Cp / Cpk' },
-    ...(data.length >= 10 ? [{ key: 'premortem' as const, label: 'Premortem' }] : []),
+    ...(data.length >= 6 ? [{ key: 'premortem' as const, label: 'Premortem' }] : []),
   ];
 
   return (
@@ -404,7 +404,7 @@ Write 2-3 sentences of actionable premortem analysis. What should the team watch
           ))}
         </div>
         {/* Premortem overlay toggle */}
-        {data.length >= 10 && (
+        {data.length >= 6 && (
           <button
             onClick={() => setShowPremortem(!showPremortem)}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition-all border ${
@@ -715,7 +715,7 @@ Write 2-3 sentences of actionable premortem analysis. What should the team watch
       {activeTab === 'premortem' && forecastResult && (
         <div>
           {/* Low data warning */}
-          {data.length < 20 && data.length >= 10 && (
+          {data.length < 20 && data.length >= 6 && (
             <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3 mb-4 text-amber-300 text-xs">
               <strong>Limited data for forecast:</strong> Predictions are more reliable with 20+ data points.
               Results with {data.length} points are indicative only.

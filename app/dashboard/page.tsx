@@ -362,6 +362,7 @@ export default function DashboardPage() {
   const [sharedProjects, setSharedProjects] = useState<any[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
   const [showAIAssistant, setShowAIAssistant] = useState(false);
+  const [activeSPCWidget, setActiveSPCWidget] = useState<{id: string, config: any} | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const userIdRef = useRef<string | null>(null);
   const [isLoadingData, setIsLoadingData] = useState(true);
@@ -370,14 +371,10 @@ export default function DashboardPage() {
   const selectedProjectIdRef = useRef<string>("guest-1");
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isSavingRef = useRef(false);
+  const isSwitchingProjectRef = useRef(false);
 
   const DEFAULT_WIDTH = 450;
   const DEFAULT_HEIGHT = 280;
-  const GAP_X = 30;
-  const GAP_Y = 30;
-  const START_X = 20;
-  const START_Y = 20;
-  const COLS = 3;
 
 const [projectLimit, setProjectLimit] = useState({ canCreate: true, current: 0, max: 3 });
 const [aiLimit, setAiLimit] = useState({ allowed: true, remaining: 10, resetTime: null as Date | null });
@@ -405,6 +402,11 @@ const [aiLimit, setAiLimit] = useState({ allowed: true, remaining: 10, resetTime
       },
       async (payload) => {
         console.log('🔄 Widget change detected:', payload);
+        // ✅ DON'T reload if we're switching projects
+        if (isSwitchingProjectRef.current) {
+          console.log('⏸️ Skipping reload - project switch in progress');
+          return;
+        }
         // ✅ DON'T reload if we're actively editing (have temp widgets)
         const hasTempWidgets = widgetsRef.current.some(w => w.id.startsWith('temp-'));
         if (hasTempWidgets) {
@@ -672,15 +674,24 @@ useEffect(() => {
 
  useEffect(() => {
   console.log('[save effect] widgets changed', { isLoaded, userId, widgets, selectedProjectId });
+  if (isSwitchingProjectRef.current) {
+    console.log('[save effect] Skipping - project switch in progress');
+    return;
+  }
   if (isLoaded && userId && widgets.length > 0 && !selectedProjectId.startsWith('guest-')) {
     scheduleSave();
   }
 }, [widgets, isLoaded, userId, selectedProjectId]); // ✅ REMOVED scheduleSave from dependencies
 
 const handleProjectSelect = async (projectId: string, projectName: string) => {
-  // Save current project before switching
+  // Prevent save effect from firing during project switch
+  isSwitchingProjectRef.current = true;
+
+  // Cancel any pending saves
   if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-  if (userIdRef.current) {
+
+  // Save current project before switching
+  if (userIdRef.current && !selectedProjectIdRef.current.startsWith('guest-')) {
     await saveToDatabase(selectedProjectIdRef.current, widgetsRef.current);
   }
 
@@ -691,6 +702,7 @@ const handleProjectSelect = async (projectId: string, projectName: string) => {
   if (projectId === 'guest-1' || !userId) {
     setWidgets(DEMO_WIDGETS);
     setCurrentProjectPermission('owner');
+    isSwitchingProjectRef.current = false;
     return;
   }
 
@@ -698,6 +710,7 @@ const handleProjectSelect = async (projectId: string, projectName: string) => {
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (!uuidRegex.test(projectId)) {
     setWidgets([]);
+    isSwitchingProjectRef.current = false;
     return;
   }
 
@@ -732,6 +745,12 @@ const handleProjectSelect = async (projectId: string, projectName: string) => {
   }));
 
   setWidgets(mappedWidgets);
+
+  // Allow save effect to work again after a brief delay
+  // (wait for React to process the setWidgets update)
+  setTimeout(() => {
+    isSwitchingProjectRef.current = false;
+  }, 100);
 };
 
 const handleProjectsChange = async (updatedProjectsList: Project[]) => {
@@ -846,34 +865,96 @@ const handleMoveProjectToFolder = async (projectId: string, folderId: string | n
     ));
   }
 };
-  const checkCollision = (x: number, y: number, width: number, height: number, currentWidgets: WidgetPosition[], excludeId?: string) => {
+  const checkCollision = (
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    currentWidgets: WidgetPosition[],
+    excludeId?: string
+  ): boolean => {
+    const PADDING = 20;
     return currentWidgets.some(widget => {
       if (excludeId && widget.id === excludeId) return false;
-      const PADDING = 10;
-      return !(x + width + PADDING < widget.x || x > widget.x + widget.width + PADDING || y + height + PADDING < widget.y || y > widget.y + widget.height + PADDING);
+      return !(
+        x + width + PADDING < widget.x ||
+        x > widget.x + widget.width + PADDING ||
+        y + height + PADDING < widget.y ||
+        y > widget.y + widget.height + PADDING
+      );
     });
   };
 
-  const findNextPosition = (width: number, height: number, currentWidgets: WidgetPosition[]) => {
-    for (let row = 0; row < 50; row++) {
-      for (let col = 0; col < COLS; col++) {
-        const x = START_X + (col * (DEFAULT_WIDTH + GAP_X));
-        const y = START_Y + (row * (DEFAULT_HEIGHT + GAP_Y));
-        if (!checkCollision(x, y, width, height, currentWidgets)) return { x, y };
+  const findNextPosition = (
+    width: number,
+    height: number,
+    currentWidgets: WidgetPosition[]
+  ): { x: number; y: number } => {
+    const CANVAS_WIDTH = 1800;
+    const GAP = 30;
+    const MARGIN = 20;
+
+    // Build candidate positions from existing widget boundaries
+    const xCandidates = new Set<number>([MARGIN]);
+    const yCandidates = new Set<number>([MARGIN]);
+
+    currentWidgets.forEach(w => {
+      xCandidates.add(w.x + w.width + GAP);
+      yCandidates.add(w.y + w.height + GAP);
+      xCandidates.add(w.x);
+      yCandidates.add(w.y);
+    });
+
+    const sortedX = Array.from(xCandidates)
+      .filter(x => x >= MARGIN && x + width <= CANVAS_WIDTH + 200)
+      .sort((a, b) => a - b);
+    const sortedY = Array.from(yCandidates)
+      .filter(y => y >= MARGIN)
+      .sort((a, b) => a - b);
+
+    // Try every (x, y) candidate pair, find first non-colliding position
+    for (const y of sortedY) {
+      for (const x of sortedX) {
+        if (x + width > CANVAS_WIDTH) continue;
+        if (!checkCollision(x, y, width, height, currentWidgets)) {
+          return { x, y };
+        }
       }
     }
-    return { x: START_X, y: START_Y + (currentWidgets.length * 100) };
+
+    // Fallback: place below all existing widgets
+    if (currentWidgets.length === 0) {
+      return { x: MARGIN, y: MARGIN };
+    }
+
+    const maxBottom = Math.max(...currentWidgets.map(w => w.y + w.height));
+    return { x: MARGIN, y: maxBottom + GAP };
   };
 
-  const findNearbyPosition = (sourceWidget: WidgetPosition, newWidth: number, newHeight: number, currentWidgets: WidgetPosition[]) => {
+  const findNearbyPosition = (
+    sourceWidget: WidgetPosition,
+    newWidth: number,
+    newHeight: number,
+    currentWidgets: WidgetPosition[]
+  ): { x: number; y: number } => {
     const GAP = 30;
+    const CANVAS_WIDTH = 1800;
+
     const tryPositions = [
       { x: sourceWidget.x + sourceWidget.width + GAP, y: sourceWidget.y },
       { x: sourceWidget.x, y: sourceWidget.y + sourceWidget.height + GAP },
+      { x: Math.max(20, sourceWidget.x - newWidth - GAP), y: sourceWidget.y },
+      { x: sourceWidget.x, y: Math.max(20, sourceWidget.y - newHeight - GAP) },
     ];
+
     for (const pos of tryPositions) {
-      if (!checkCollision(pos.x, pos.y, newWidth, newHeight, currentWidgets)) return pos;
+      if (pos.x < 0 || pos.x + newWidth > CANVAS_WIDTH) continue;
+      if (pos.y < 0) continue;
+      if (!checkCollision(pos.x, pos.y, newWidth, newHeight, currentWidgets)) {
+        return pos;
+      }
     }
+
     return findNextPosition(newWidth, newHeight, currentWidgets);
   };
 
@@ -892,10 +973,19 @@ const addWidget = useCallback((type: string) => {
   }
 
   setWidgets(prev => {
-    let width = DEFAULT_WIDTH, height = DEFAULT_HEIGHT;
-    if (type === 'text') { width = 400; height = 80; }
-    else if (type === 'kpi') { width = 300; height = 180; }
-    else if (type === 'table') { width = 600; height = 400; }
+    let width = DEFAULT_WIDTH;
+    let height = DEFAULT_HEIGHT;
+
+    switch (type) {
+      case 'kpi':    width = 280;  height = 160; break;
+      case 'text':   width = 420;  height = 100; break;
+      case 'table':  width = 620;  height = 300; break;
+      case 'pie':    width = 420;  height = 340; break;
+      case 'bar':
+      case 'line':
+      case 'trend':  width = 500;  height = 300; break;
+      default:       width = DEFAULT_WIDTH; height = DEFAULT_HEIGHT;
+    }
     
     const position = findNextPosition(width, height, prev);
     
@@ -1151,12 +1241,44 @@ const updateWidgetData = useCallback((id: string, data: any) => {
         }
       }
       
-      let width = DEFAULT_WIDTH, height = DEFAULT_HEIGHT;
-      if (widget.type === 'text') { width = 400; height = 80; }
-      else if (widget.type === 'kpi') { width = 300; height = 180; }
-      else if (widget.type === 'table') { width = 600; height = 400; }
-      
-      const position = findNextPosition(width, height, [...prev, ...newWidgets]);
+      let width = DEFAULT_WIDTH;
+      let height = DEFAULT_HEIGHT;
+
+      switch (widget.type) {
+        case 'kpi':
+          width = 280;
+          height = 160;
+          break;
+        case 'text':
+          width = 420;
+          height = 100;
+          break;
+        case 'table': {
+          const rowCount = widget.data?.rows?.length ?? 5;
+          width = 620;
+          height = Math.min(500, Math.max(250, 60 + rowCount * 40));
+          break;
+        }
+        case 'pie':
+          width = 420;
+          height = 340;
+          break;
+        case 'bar':
+        case 'line':
+        case 'trend': {
+          const pointCount = widget.data?.data?.length ?? 6;
+          width = Math.min(900, Math.max(400, 300 + pointCount * 30));
+          height = 300;
+          break;
+        }
+        default:
+          width = DEFAULT_WIDTH;
+          height = DEFAULT_HEIGHT;
+      }
+
+      // Calculate position AFTER sizing, passing ALL already-placed widgets
+      const allPlaced = [...prev, ...newWidgets];
+      const position = findNextPosition(width, height, allPlaced);
       
       newWidgets.push({
         id: `temp-${Date.now()}-${index}`,
@@ -1215,6 +1337,33 @@ const updateWidgetData = useCallback((id: string, data: any) => {
       case 'read':
         console.log('✅ AI read widget data successfully');
         break;
+      
+      case 'edit':
+        if (action.widgetId && action.updates) {
+          setWidgets(prev => prev.map(w => {
+            if (w.id !== action.widgetId) return w;
+            const updated = { ...w, data: { ...w.data } };
+            if (action.updates.title) updated.data.title = action.updates.title;
+            if (action.updates.data) updated.data.data = action.updates.data;
+            if (action.updates.colors) updated.data.colors = action.updates.colors;
+            if (action.updates.value !== undefined) updated.data.value = action.updates.value;
+            if (action.updates.change !== undefined) updated.data.change = action.updates.change;
+            if (action.updates.content !== undefined) updated.data.content = action.updates.content;
+            return updated;
+          }));
+        }
+        break;
+
+      case 'spc':
+        // SPC action from chat - handled by activeSPCWidget state
+        if (action.widgetId) {
+          setActiveSPCWidget({ id: action.widgetId, config: action.spcConfig || {} });
+        }
+        break;
+
+      case 'answer':
+        // Answer action - content is already in the streamed chat message
+        break;
         
       default:
         console.log('ℹ️ Unknown action type:', action.type);
@@ -1254,7 +1403,7 @@ const updateWidgetData = useCallback((id: string, data: any) => {
   aiLimit={aiLimit}
 />       <div className="flex-1 flex flex-col gap-4">
           <TopBar onAddWidget={addWidget} projectName={selectedProjectName} onOpenAI={() => setShowAIAssistant(true)} onShareClick={() => setShowShareModal(true)} />
-          <DashboardCanvas widgets={widgets} onDeleteWidget={deleteWidget} onDuplicateWidget={duplicateWidget} onAddWidget={addWidget} onUpdatePosition={updateWidgetPosition} onUpdateSize={updateWidgetSize} onUpdateData={updateWidgetData} onBringToFront={bringWidgetToFront} permission={currentProjectPermission} />
+          <DashboardCanvas widgets={widgets} onDeleteWidget={deleteWidget} onDuplicateWidget={duplicateWidget} onAddWidget={addWidget} onUpdatePosition={updateWidgetPosition} onUpdateSize={updateWidgetSize} onUpdateData={updateWidgetData} onBringToFront={bringWidgetToFront} permission={currentProjectPermission} activeSPCWidget={activeSPCWidget} onClearActiveSPC={() => setActiveSPCWidget(null)} />
         </div>
       </div>
 <AIAssistant 

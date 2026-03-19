@@ -8,6 +8,7 @@ interface Message {
   timestamp: number;
   fileType?: 'csv' | 'image';
   fileName?: string;
+  confirmActions?: any[];
 }
 
 interface ChatPanelProps {
@@ -22,6 +23,7 @@ export default function ChatPanel({ onWidgetAction, currentWidgets, aiLimit }: C
   const [isLoading, setIsLoading] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<{type: 'csv' | 'image', data: string, name: string} | null>(null);
+  const [lastWidgetId, setLastWidgetId] = useState<string | null>(null);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -161,7 +163,7 @@ export default function ChatPanel({ onWidgetAction, currentWidgets, aiLimit }: C
             };
           }
           else if (['bar', 'line', 'pie', 'trend'].includes(w.type) && w.data?.data) {
-            info.chartData = w.data.data.slice(0, 10);
+            info.chartData = w.data.data;
           } else if (w.type === 'kpi') {
             info.kpiData = {
               value: w.data?.value,
@@ -175,7 +177,7 @@ export default function ChatPanel({ onWidgetAction, currentWidgets, aiLimit }: C
 
       const requestBody: any = {
         message: userMessage.content,
-        conversationHistory: messages.slice(-5),
+        conversationHistory: messages.slice(-10),
         dashboardContext
       };
 
@@ -190,7 +192,13 @@ export default function ChatPanel({ onWidgetAction, currentWidgets, aiLimit }: C
         }
       }
 
-      console.log('📤 Sending to API:', requestBody);
+      // Add placeholder assistant message for streaming
+      const placeholderMsg: Message = {
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now()
+      };
+      setMessages(prev => [...prev, placeholderMsg]);
 
       const response = await fetch('/api/chat-dashboard', {
         method: 'POST',
@@ -198,29 +206,92 @@ export default function ChatPanel({ onWidgetAction, currentWidgets, aiLimit }: C
         body: JSON.stringify(requestBody)
       });
 
-      console.log('📥 Response status:', response.status);
-
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ API Error:', errorText);
-        throw new Error(`API error (${response.status})`);
+        // Remove the empty placeholder message before throwing
+        setMessages(prev => prev.slice(0, -1));
+        let errorMsg = `API error (${response.status})`;
+        try {
+          const errBody = await response.json();
+          if (errBody.isRateLimit || response.status === 429) {
+            errorMsg = '⏳ AI quota temporarily exceeded. All Gemini API routes (chat, generate, SPC) share the same limit. Please wait 1-2 minutes and try again.';
+          } else {
+            errorMsg = errBody.error || errBody.details || errorMsg;
+          }
+        } catch {}
+        throw new Error(errorMsg);
       }
 
-      const data = await response.json();
-      console.log('✅ API Success:', data);
+      // Stream SSE response
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let fullText = '';
+      let pendingActions: any[] = [];
 
-      const assistantMessage: Message = {
-        role: 'assistant',
-        content: data.message || 'Done!',
-        timestamp: Date.now()
-      };
-      setMessages(prev => [...prev, assistantMessage]);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      if (data.actions && data.actions.length > 0) {
-        console.log('🎯 Executing actions:', data.actions);
-        data.actions.forEach((action: any) => {
-          onWidgetAction(action);
-        });
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const jsonStr = line.slice(6).trim();
+          if (jsonStr === '[DONE]' || !jsonStr) continue;
+
+          try {
+            const parsed = JSON.parse(jsonStr);
+
+            // If this chunk has actions, collect them
+            if (parsed.actions) {
+              pendingActions = parsed.actions;
+              continue;
+            }
+
+            // Otherwise it's a text chunk - append to streaming message
+            if (parsed.text) {
+              fullText += parsed.text;
+              // Strip action delimiters from display text
+              let displayText = fullText;
+              const actStart = displayText.indexOf('__ACTIONS_START__');
+              if (actStart !== -1) {
+                displayText = displayText.substring(0, actStart).trim();
+              }
+              // Update the last message in place
+              setMessages(prev => {
+                const updated = [...prev];
+                updated[updated.length - 1] = {
+                  ...updated[updated.length - 1],
+                  content: displayText
+                };
+                return updated;
+              });
+            }
+          } catch {
+            // skip malformed chunks
+          }
+        }
+      }
+
+      // Execute collected actions after stream completes
+      if (pendingActions.length > 0) {
+        for (const action of pendingActions) {
+          if (action.type === 'confirm') {
+            // Store confirm actions on the message for UI rendering
+            setMessages(prev => {
+              const updated = [...prev];
+              updated[updated.length - 1] = {
+                ...updated[updated.length - 1],
+                confirmActions: action.pendingActions
+              };
+              return updated;
+            });
+          } else {
+            // Track last widget ID for reference resolution
+            if (action.widgetId) setLastWidgetId(action.widgetId);
+            onWidgetAction(action);
+          }
+        }
       }
 
     } catch (error: any) {
@@ -324,6 +395,31 @@ export default function ChatPanel({ onWidgetAction, currentWidgets, aiLimit }: C
                         </div>
                       )}
                       <p className="text-xs whitespace-pre-wrap">{msg.content}</p>
+                      {msg.confirmActions && msg.confirmActions.length > 0 && (
+                        <div className="flex gap-2 mt-2">
+                          <button
+                            onClick={() => {
+                              msg.confirmActions!.forEach((a: any) => onWidgetAction(a));
+                              setMessages(prev => prev.map((m, idx) =>
+                                idx === messages.indexOf(msg) ? { ...m, confirmActions: undefined } : m
+                              ));
+                            }}
+                            className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded-lg transition-colors"
+                          >
+                            Yes, do it
+                          </button>
+                          <button
+                            onClick={() => {
+                              setMessages(prev => prev.map((m, idx) =>
+                                idx === messages.indexOf(msg) ? { ...m, confirmActions: undefined } : m
+                              ));
+                            }}
+                            className="px-3 py-1 bg-white/10 hover:bg-white/20 text-white text-xs rounded-lg transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
                       <p className={`text-[10px] mt-1 ${
                         msg.role === 'user' ? 'text-blue-200' : 'text-gray-400'
                       }`}>

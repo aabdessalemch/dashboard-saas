@@ -11,22 +11,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'API key not configured. Please add GEMINI_API_KEY to your .env file.' }, { status: 500 });
     }
 
-    // List models
-    const listUrl = `https://generativelanguage.googleapis.com/v1/models?key=${apiKey}`;
-    const listResponse = await fetch(listUrl);
-    
-    if (!listResponse.ok) {
-      const errorText = await listResponse.text();
-      console.error('❌ Failed to list models:', errorText);
-      return NextResponse.json({ error: 'Failed to connect to AI service. Please check your API key.' }, { status: 500 });
-    }
+    // Hardcode model instead of listing at runtime (saves a request + avoids quota issues)
+    const availableModel = { name: 'models/gemini-2.5-flash' };
 
-    const modelsList = await listResponse.json();
-    const availableModel = modelsList.models?.find((m: any) => 
-      m.supportedGenerationMethods?.includes('generateContent')
-    );
-
-    if (!availableModel) {
+    if (false) {
       console.error('❌ No compatible models found');
       return NextResponse.json({ error: 'No AI models available. Please contact support.' }, { status: 500 });
     }
@@ -112,7 +100,7 @@ Analyze and respond with appropriate widget(s) as JSON array ONLY:`;
     }
 
     // Call API
-    const generateUrl = `https://generativelanguage.googleapis.com/v1/${availableModel.name}:generateContent?key=${apiKey}`;
+    const generateUrl = `https://generativelanguage.googleapis.com/v1beta/${availableModel.name}:generateContent?key=${apiKey}`;
     
     console.log('📡 Calling Gemini API...');
     

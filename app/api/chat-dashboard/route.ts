@@ -1,381 +1,501 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
+
+const GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_STREAM_URL = (apiKey: string) =>
+  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?key=${apiKey}&alt=sse`;
+
+// === Canvas Context Builder ===
+
+function buildCanvasContext(dashboardContext: any): string {
+  if (!dashboardContext?.widgetTypes?.length) {
+    return 'The dashboard is currently empty - no widgets exist yet.';
+  }
+
+  const lines: string[] = [
+    `The dashboard has ${dashboardContext.widgetCount} widget(s) on the canvas:\n`
+  ];
+
+  dashboardContext.widgetTypes.forEach((w: any, i: number) => {
+    lines.push(`--- Widget ${i + 1} ---`);
+    lines.push(`ID: ${w.id}`);
+    lines.push(`Type: ${w.type}`);
+    lines.push(`Title: "${w.title}"`);
+
+    if (w.chartData && w.chartData.length > 0) {
+      const values = w.chartData.map((d: any) => d.value);
+      const mean = (values.reduce((a: number, b: number) => a + b, 0) / values.length).toFixed(1);
+      const max = Math.max(...values);
+      const min = Math.min(...values);
+      const first = values[0];
+      const last = values[values.length - 1];
+      const trendDirection = last > first ? 'upward' : last < first ? 'downward' : 'flat';
+
+      lines.push(`Data (${w.chartData.length} points):`);
+      w.chartData.forEach((pt: any) => {
+        lines.push(`  ${pt.name}: ${pt.value}`);
+      });
+      lines.push(`Computed stats: mean=${mean}, max=${max}, min=${min}, trend=${trendDirection}`);
+    }
+
+    if (w.tableData) {
+      lines.push(`Table: ${w.tableData.rowCount} rows`);
+      lines.push(`Columns: ${w.tableData.columns?.join(', ')}`);
+      if (w.tableData.allRows?.length > 0) {
+        w.tableData.allRows.forEach((row: any, idx: number) => {
+          const vals = Object.values(row).map((cell: any) =>
+            typeof cell === 'object' && cell?.value !== undefined ? cell.value : cell
+          ).join(' | ');
+          lines.push(`  ${idx === 0 ? 'HEADERS' : `Row ${idx}`}: ${vals}`);
+        });
+      }
+    }
+
+    if (w.kpiData) {
+      lines.push(`KPI value: ${w.kpiData.value}`);
+      lines.push(`KPI change: ${w.kpiData.change}`);
+    }
+
+    lines.push('');
+  });
+
+  return lines.join('\n');
+}
+
+// === Conversation History Formatter ===
+
+function formatHistory(history: any[]): string {
+  if (!history?.length) return 'No previous messages.';
+  return history
+    .slice(-10)
+    .map((m: any) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+    .join('\n');
+}
+
+// === System Prompt Builder ===
+
+function buildSystemPrompt(canvasContext: string, historyText: string): string {
+  return `You are the AI brain of Talk to Data - a smart dashboard generator and analyst.
+You have full awareness of the user's canvas and can read, create, edit, delete,
+and interpret any widget on it.
+
+CANVAS STATE (read this carefully before every response)
+${canvasContext}
+
+RECENT CONVERSATION
+${historyText}
+
+YOUR CAPABILITIES
+
+You can perform these 6 action types:
+
+1. ADD - create new widget(s) on the canvas
+2. EDIT - modify an existing widget by its exact ID from the canvas state above
+3. DELETE - remove a widget by its exact ID
+4. CONFIRM - ask the user to confirm before doing something destructive
+5. ANSWER - respond to a data question without touching the canvas
+6. SPC - trigger the SPC analysis panel on a chart widget
+
+RESPONSE FORMAT - ALWAYS USE THIS STRUCTURE
+
+Write your conversational reply naturally, then at the very end emit:
+
+__ACTIONS_START__
+[array of action objects]
+__ACTIONS_END__
+
+If no canvas action is needed (e.g. answering a question), emit:
+
+__ACTIONS_START__
+[]
+__ACTIONS_END__
+
+ALL 6 ACTION TYPES - EXACT FORMAT
+
+// 1. ADD - create new widget(s)
+{
+  "type": "add",
+  "widgets": [
+    {
+      "type": "trend | bar | line | pie | kpi | table | text",
+      "data": { ...see widget formats below... }
+    }
+  ]
+}
+
+// 2. EDIT - modify existing widget (use EXACT ID from canvas state)
+{
+  "type": "edit",
+  "widgetId": "EXACT_ID_FROM_CANVAS_STATE",
+  "updates": {
+    "title": "optional new title",
+    "data": [{"name": "label", "value": 123}],
+    "colors": ["#hexcolor"],
+    "value": "new value for KPI",
+    "change": "+12% for KPI",
+    "content": "<html> for text widget"
+  }
+}
+
+// 3. DELETE - remove a widget (use EXACT ID from canvas state)
+{
+  "type": "delete",
+  "widgetId": "EXACT_ID_FROM_CANVAS_STATE"
+}
+
+// 4. CONFIRM - ask before destructive action (use for delete all, clear dashboard)
+{
+  "type": "confirm",
+  "message": "This will delete all 5 widgets. Are you sure?",
+  "pendingActions": [...the actions to execute if confirmed...]
+}
+
+// 5. ANSWER - data question, no canvas change needed
+{
+  "type": "answer",
+  "insight": "Plain English analysis"
+}
+
+// 6. SPC - open the SPC panel on a specific chart widget
+{
+  "type": "spc",
+  "widgetId": "EXACT_ID_FROM_CANVAS_STATE",
+  "spcConfig": {
+    "openPanel": true,
+    "activeTab": "compare | rules | capability | premortem",
+    "showPremortem": false,
+    "forecastHorizon": 7,
+    "usl": null,
+    "lsl": null
+  }
+}
+
+WIDGET DATA FORMATS
+
+TREND (area chart - time series, growth, weekly/monthly data):
+{"title":"Title","data":[{"name":"Wk1","value":400},{"name":"Wk2","value":600}],"colors":["#f59e0b"]}
+
+BAR (comparisons - categories, quarters, regions):
+{"title":"Title","data":[{"name":"Q1","value":245000},{"name":"Q2","value":312000}],"colors":["#8b5cf6"]}
+
+LINE (detailed point-by-point data):
+{"title":"Title","data":[{"name":"Jan","value":12000},{"name":"Feb","value":15000}],"colors":["#3b82f6"]}
+
+PIE (proportions - market share, distribution):
+{"title":"Title","data":[{"name":"A","value":40},{"name":"B","value":30},{"name":"C","value":30}],"colors":["#8b5cf6","#3b82f6","#10b981"]}
+
+KPI (single metric card):
+{"title":"Revenue","value":"$2.4M","unit":"","trend":"up","trendValue":"18.5","change":"+18.5%"}
+
+TABLE:
+{"title":"Data","rows":[[{"value":"Product"},{"value":"Revenue"}],[{"value":"Widget A"},{"value":"$120K"}]]}
+
+TEXT:
+{"content":"<div style='color:white;font-size:20px;font-weight:bold'>Title Here</div>"}
+
+SPC FEATURE - WHAT IT IS AND HOW TO USE IT
+
+The app has a Statistical Process Control (SPC) system built in.
+Any trend, bar, line, or pie chart has an "Analyze with SPC" button.
+
+The SPC panel has 4 tabs:
+- "compare" = side-by-side: original chart vs control chart with UCL/CL/LCL lines
+- "rules" = runs all 7 Nelson rules and shows which ones fired
+- "capability" = Cp/Cpk analysis (requires USL and LSL from user)
+- "premortem" = predictive forecast of next N points
+
+Trigger SPC when user says:
+- "Analyze my chart" / "run SPC" -> openPanel: true, activeTab: "compare"
+- "Show me next 7 weeks" / "forecast" -> showPremortem: true, forecastHorizon: 7
+- "Is something bad coming?" -> showPremortem: true, activeTab: "premortem"
+- "Calculate Cp Cpk USL 1100 LSL 200" -> activeTab: "capability", usl: 1100, lsl: 200
+- "Which rules are firing?" -> activeTab: "rules"
+
+If user says "run SPC" without specifying which chart:
+- If there is only one chart, use that one
+- If there are multiple, ask "Which chart - [list titles]?"
+
+STRICT DATA RULES
+
+- Chart data MUST use field "name" (never: date, label, month, category)
+- Chart data MUST use field "value" as a NUMBER (never a string, no $ or commas)
+- Use EXACT numbers from user - never invent placeholder data
+- Create minimum 4 data points for any chart
+- When editing, use the EXACT widgetId from the canvas state above
+- Never guess a widget ID - only use IDs that appear in the canvas state
+
+REFERENCE RESOLUTION - HOW TO HANDLE VAGUE REQUESTS
+
+When user says "it", "that", "the chart", "this widget":
+1. Check the conversation history for the most recently mentioned widget
+2. If still ambiguous, pick the most recently created widget
+3. If still ambiguous, ask: "Which widget do you mean - [list titles]?"
+
+When user says "make it blue" -> edit colors of resolved widget
+When user says "delete it" -> delete resolved widget
+When user says "add another week" -> edit resolved chart, append data point
+When user says "do the same for the bar chart" -> repeat last operation on bar widget
+
+DESTRUCTIVE ACTION RULES
+
+ALWAYS use the "confirm" action (never execute immediately) when:
+- User says "delete all", "remove all", "clear everything", "start over"
+- User says "delete all [type]s" (e.g. "delete all KPIs")
+- The action would delete 3 or more widgets at once
+
+For single widget deletion ("delete the pie chart"), execute immediately - no confirm needed.
+
+CSV AND IMAGE HANDLING
+
+CSV uploaded:
+- Examine all columns and row count
+- Identify numeric columns vs label columns
+- If one label column + one numeric column -> trend or bar chart
+- If one label column + multiple numeric columns -> grouped bar or multi-line
+- If columns represent proportions that sum to 100 -> pie chart
+- Use EXACT values from the CSV - never round or approximate
+- Name the chart after the CSV filename if no better title is evident
+
+Image uploaded:
+- Extract every number, label, and data series visible
+- Match chart type to what is shown in the image
+- If image shows a table -> create a table widget with exact values
+- If image shows a chart -> recreate it as the matching widget type
+
+EXAMPLES OF SMART BEHAVIOR
+
+User: "Why is week 4 so high?"
+-> ANSWER action: compute week 4 vs mean, flag as outlier, give plain English reason
+
+User: "What is the average of my trend chart?"
+-> ANSWER action: compute mean from chart data, reply in chat
+
+User: "Make the bar chart green"
+-> EDIT action: find bar widget ID, update colors to ["#10b981"]
+
+User: "Add week 13 with 980 to my trend chart"
+-> EDIT action: find trend widget ID, append {"name":"Wk13","value":980} to data array
+
+User: "Create a dashboard for a factory"
+-> ADD action: create multiple relevant widgets (trend for output, KPIs for defects/efficiency, bar for shifts)
+
+User: "Delete all KPIs"
+-> CONFIRM action: "This will delete [N] KPI widgets. Are you sure?"
+
+User: "Summarize my dashboard"
+-> ANSWER action: narrative description of all widgets and their key data points
+
+User: "Run SPC on the revenue chart"
+-> SPC action: find revenue chart ID, openPanel: true, activeTab: "compare"
+
+User: "Show me the next 10 weeks forecast"
+-> SPC action: find most relevant chart, showPremortem: true, forecastHorizon: 10`;
+}
+
+// === Auto-fix Actions ===
+
+function autoFixActions(actions: any[]): any[] {
+  return actions.map(action => {
+    // Fix chart data fields in add actions
+    if (action.type === 'add' && action.widgets) {
+      action.widgets = action.widgets.map((widget: any) => {
+        if (['bar', 'line', 'pie', 'trend'].includes(widget.type) && widget.data?.data) {
+          widget.data.data = widget.data.data.map((item: any) => ({
+            name: String(
+              item.name ?? item.date ?? item.label ?? item.month ??
+              item.category ?? item.x ?? item.period ?? item.week ?? ''
+            ),
+            value: typeof item.value === 'number' ? item.value :
+                   typeof item.amount === 'number' ? item.amount :
+                   typeof item.count === 'number' ? item.count :
+                   typeof item.total === 'number' ? item.total :
+                   parseFloat(String(item.value ?? 0).replace(/[^0-9.-]/g, '')) || 0
+          }));
+        }
+        return widget;
+      });
+    }
+    // Fix chart data fields in edit actions
+    if (action.type === 'edit' && action.updates?.data) {
+      if (Array.isArray(action.updates.data)) {
+        action.updates.data = action.updates.data.map((item: any) => ({
+          name: String(item.name ?? item.date ?? item.label ?? ''),
+          value: typeof item.value === 'number' ? item.value :
+                 parseFloat(String(item.value ?? 0).replace(/[^0-9.-]/g, '')) || 0
+        }));
+      }
+    }
+    return action;
+  });
+}
+
+// === Route Handler ===
 
 export async function POST(request: NextRequest) {
-  console.log('💬 Chat API called!');
-  
-  try {
-    const apiKey = process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY;
-    
-    console.log('🔑 Checking API keys...');
-    console.log('NEXT_PUBLIC_ANTHROPIC_API_KEY:', process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY ? '✅ Found' : '❌ Missing');
-    console.log('ANTHROPIC_API_KEY:', process.env.ANTHROPIC_API_KEY ? '✅ Found' : '❌ Missing');
-    console.log('GEMINI_API_KEY:', process.env.GEMINI_API_KEY ? '✅ Found' : '❌ Missing');
-    
-    if (!apiKey) {
-      console.error('❌ No API key found in any environment variable');
-      return NextResponse.json({ 
-        message: 'API key not configured. Check your .env.local file.',
-        actions: []
-      });
-    }
-
-    console.log('✅ Using API key:', apiKey.substring(0, 15) + '...');
-
-    const { message, conversationHistory, dashboardContext, csvData, csvFileName, imageData, imageFileName } = await request.json();
-    
-    console.log('💬 User message:', message);
-    console.log('📊 Dashboard context:', JSON.stringify(dashboardContext, null, 2));
-    if (csvData) console.log('📄 CSV uploaded:', csvFileName);
-    if (imageData) console.log('🖼️ Image uploaded:', imageFileName);
-
-    const isGeminiKey = apiKey.startsWith('AIza');
-    const isAnthropicKey = apiKey.startsWith('sk-ant-');
-
-    if (isGeminiKey) {
-      console.log('🤖 Using Gemini API');
-      
-      const listUrl = `https://generativelanguage.googleapis.com/v1/models?key=${apiKey}`;
-      const listResponse = await fetch(listUrl);
-      
-      if (!listResponse.ok) {
-        return NextResponse.json({ 
-          message: 'Failed to connect to AI service.',
-          actions: []
-        });
-      }
-
-      const modelsList = await listResponse.json();
-      const availableModel = modelsList.models?.find((m: any) => 
-        m.supportedGenerationMethods?.includes('generateContent')
-      );
-
-      if (!availableModel) {
-        return NextResponse.json({ 
-          message: 'AI model not available.',
-          actions: []
-        });
-      }
-
-      // Build detailed widget context
-      const widgetDetails = dashboardContext.widgetTypes?.map((w: any, i: number) => {
-        let desc = `${i+1}. ${w.type.toUpperCase()}: "${w.title}" (ID: ${w.id})`;
-        
-        console.log(`\n🔍 Widget ${i+1}:`, w.type);
-        
-        if (w.tableData) {
-          console.log('✅ Table data found!');
-          console.log('Columns:', w.tableData.columns);
-          console.log('Row count:', w.tableData.rowCount);
-          console.log('All rows:', w.tableData.allRows);
-          
-          desc += `\n   📊 Table with ${w.tableData.rowCount} rows`;
-          desc += `\n   📋 Columns: ${w.tableData.columns.join(', ')}`;
-          
-          if (w.tableData.allRows && w.tableData.allRows.length > 0) {
-            desc += `\n   📄 COMPLETE TABLE DATA (${w.tableData.allRows.length} rows):\n`;
-            w.tableData.allRows.forEach((row: any, idx: number) => {
-              const rowValues = Object.values(row).map((cell: any) => {
-                if (typeof cell === 'object' && cell.value !== undefined) {
-                  return cell.value;
-                }
-                return cell;
-              }).join(' | ');
-              
-              if (idx === 0) {
-                desc += `      HEADERS: ${rowValues}\n`;
-              } else {
-                desc += `      ROW ${idx}: ${rowValues}\n`;
-              }
-            });
-            console.log('✅ Table data added to prompt');
-          } else {
-            console.log('❌ No allRows found!');
-          }
-        }
-        
-        if (w.chartData) {
-          desc += `\n   📈 Chart Data: ${JSON.stringify(w.chartData.slice(0, 5))}`;
-        }
-        
-        if (w.kpiData) {
-          desc += `\n   💰 KPI: ${w.kpiData.value}, ${w.kpiData.change}`;
-        }
-        
-        return desc;
-      }).join('\n\n') || 'No widgets on dashboard';
-
-      console.log('\n📋 WIDGET DETAILS FOR AI:\n', widgetDetails);
-
-      let promptText = `You are an EXPERT dashboard AI.
-
-═══════════════════════════════════════════════════════════════
-CURRENT DASHBOARD (${dashboardContext.widgetCount} widgets):
-═══════════════════════════════════════════════════════════════
-${widgetDetails}
-
-═══════════════════════════════════════════════════════════════
-USER REQUEST: "${message}"
-═══════════════════════════════════════════════════════════════
-
-${csvData ? `
-📄 CSV FILE: "${csvFileName}"
-Headers: ${csvData[0]?.join(', ')}
-Rows: ${csvData.length - 1}
-
-COMPLETE DATA:
-${csvData.map((row: string[], idx: number) => {
-  if (idx === 0) return `HEADERS: ${row.join(' | ')}`;
-  return `ROW ${idx}: ${row.join(' | ')}`;
-}).join('\n')}
-
-⚠️ USE EXACT CSV NUMBERS ⚠️
-` : ''}
-
-${imageData ? `🖼️ IMAGE: "${imageFileName}"` : ''}
-
-CRITICAL INSTRUCTIONS FOR CREATING CHARTS FROM TABLES:
-When user asks to create a chart from a table:
-1. Look at the COMPLETE TABLE DATA above
-2. Find the numeric column (second column usually)
-3. Use EXACT row labels and values from the table
-4. Convert any formatted numbers ($12,000) to plain numbers (12000)
-
-EXAMPLE - If table shows:
-HEADERS: Month | Revenue
-ROW 1: January | $5,000
-ROW 2: February | $7,500
-
-Then create:
-{"type":"trend","data":{"title":"Revenue Trend","data":[
-  {"name":"January","value":5000},
-  {"name":"February","value":7500}
-]}}
-
-═══════════════════════════════════════════════════════════════
-WIDGET FORMATS (USE EXACT FORMAT):
-═══════════════════════════════════════════════════════════════
-
-TREND: {"type":"trend","data":{"title":"Title","data":[{"name":"Jan","value":1000},{"name":"Feb","value":2000}]}}
-BAR: {"type":"bar","data":{"title":"Title","data":[{"name":"Q1","value":245000}]}}
-LINE: {"type":"line","data":{"title":"Title","data":[{"name":"Jan","value":12000}]}}
-PIE: {"type":"pie","data":{"title":"Title","data":[{"name":"A","value":4500}]}}
-KPI: {"type":"kpi","data":{"title":"Revenue","value":"$2.4M","change":"+18.5%"}}
-TABLE: {"type":"table","data":{"title":"Data","rows":[[{"value":"H1"}],[{"value":"D1"}]]}}
-
-⚠️ ALL CHARTS MUST USE: {"name":"text","value":NUMBER}
-- "value" must be NUMBER (not string, no $ or commas)
-- Use "name" (NOT "date", "label", "month")
-- Use "value" (NOT "amount", "count", "total")
-
-Return: {"message":"text","actions":[{"type":"add","widgets":[...]}]}`;
-
-      const parts: any[] = [{ text: promptText }];
-
-      if (imageData) {
-        const base64Image = imageData.split(',')[1];
-        parts.push({
-          inline_data: {
-            mime_type: "image/jpeg",
-            data: base64Image
-          }
-        });
-      }
-
-      const generateUrl = `https://generativelanguage.googleapis.com/v1/${availableModel.name}:generateContent?key=${apiKey}`;
-      
-      console.log('🤖 Calling Gemini API...');
-      
-      const response = await fetch(generateUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          contents: [{ parts }],
-          generationConfig: {
-            temperature: 0.3,
-            maxOutputTokens: 8192,
-          }
-        })
-      });
-
-      if (!response.ok) {
-        const error = await response.text();
-        console.error('❌ Gemini API error:', error);
-        return NextResponse.json({ 
-          message: "I'm having trouble processing this. Please try again.",
-          actions: []
-        });
-      }
-
-      const data = await response.json();
-      let text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      
-      console.log('📥 Raw AI response:', text.substring(0, 200) + '...');
-      
-      text = text.trim().replace(/```json\n?/g, '').replace(/```\n?/g, '');
-      const jsonStart = text.indexOf('{');
-      const jsonEnd = text.lastIndexOf('}');
-      
-      if (jsonStart !== -1 && jsonEnd !== -1) {
-        text = text.substring(jsonStart, jsonEnd + 1);
-        try {
-          const parsed = JSON.parse(text);
-          
-          console.log('✅ Parsed JSON:', JSON.stringify(parsed, null, 2));
-          
-          // AUTO-FIX: Convert any field to "name" and "value"
-          if (parsed.actions) {
-            parsed.actions.forEach((action: any) => {
-              if (action.widgets) {
-                action.widgets.forEach((widget: any) => {
-                  if (['bar', 'line', 'pie', 'trend'].includes(widget.type) && widget.data?.data) {
-                    const before = JSON.stringify(widget.data.data[0]);
-                    widget.data.data = widget.data.data.map((item: any) => ({
-                      name: item.name || item.date || item.label || item.month || item.category || item.x || '',
-                      value: typeof item.value === 'number' ? item.value : 
-                             typeof item.amount === 'number' ? item.amount :
-                             typeof item.count === 'number' ? item.count :
-                             typeof item.total === 'number' ? item.total :
-                             typeof item.y === 'number' ? item.y : 0
-                    }));
-                    const after = JSON.stringify(widget.data.data[0]);
-                    console.log(`✅ Fixed ${widget.type}: ${before} → ${after}`);
-                  }
-                });
-              }
-            });
-          }
-          
-          return NextResponse.json(parsed);
-        } catch (e) {
-          console.error('❌ JSON Parse error:', e);
-          console.error('Failed JSON:', text);
-        }
-      }
-
-      return NextResponse.json({
-        message: "Processing your request...",
-        actions: []
-      });
-
-    } else if (isAnthropicKey) {
-      console.log('🤖 Using Anthropic Claude API');
-      
-      const widgetDetails = dashboardContext.widgetTypes?.map((w: any) => {
-        let desc = `${w.type}: "${w.title}" (${w.id})`;
-        if (w.tableData) {
-          desc += ` | ${w.tableData.rowCount} rows`;
-          if (w.tableData.allRows) {
-            desc += ` | Data: ${JSON.stringify(w.tableData.allRows.slice(0, 3))}`;
-          }
-        }
-        if (w.chartData) desc += ` | Chart: ${JSON.stringify(w.chartData.slice(0, 3))}`;
-        if (w.kpiData) desc += ` | ${w.kpiData.value} ${w.kpiData.change}`;
-        return desc;
-      }).join(', ') || 'No widgets';
-
-      const systemPrompt = `You are an EXPERT dashboard AI assistant that creates beautiful data visualizations.
-
-YOUR CAPABILITIES:
-✅ Create KPI cards with metrics and trends
-✅ Build bar charts for comparisons
-✅ Generate line charts for detailed trends
-✅ Make pie charts for distribution
-✅ Create tables for data display
-✅ Make area/trend charts for smooth growth visualization
-✅ Extract data from tables and create charts from them
-✅ Handle any user request intelligently
-
-CURRENT DASHBOARD WIDGETS:
-${widgetDetails}
-
-RULES:
-1. Always respond with valid JSON: {"message":"friendly response","actions":[...]}
-2. If user wants to create a chart FROM existing table data, analyze the table and create the appropriate chart
-3. Data format for charts: {"name":"Label","value":NUMBER}
-4. Be helpful - if user says "chart from my table", ask WHICH columns and offer to create the chart
-5. Support these chart types: kpi, bar, line, trend, pie, table, text
-6. Always validate that numbers are actual values, not placeholders
-7. If request is unclear, ask clarifying questions in the message
-
-EXAMPLES OF SMART HANDLING:
-- "Create a bar chart from my sales table" → Analyze table columns → Create bar chart with extracted data
-- "Show Q1-Q4 revenue" → Create bar chart with 4 data points
-- "Revenue growth trend" → Create trend (area) chart
-- "Compare products" → Create bar chart
-- "Market share breakdown" → Create pie chart
-- "Monthly revenue details" → Create line chart with individual points
-
-${widgetDetails}`;
-
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model: 'claude-3-5-sonnet-20241022',
-          max_tokens: 4096,
-          messages: [
-            { role: 'user', content: systemPrompt },
-            { role: 'user', content: message }
-          ],
-        }),
-      });
-
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error?.message || 'Claude API error');
-      }
-
-      const data = await response.json();
-      const reply = data.content[0].text;
-
-      const jsonMatch = reply.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        try {
-          const parsed = JSON.parse(jsonMatch[0]);
-          
-          // AUTO-FIX
-          if (parsed.actions) {
-            parsed.actions.forEach((action: any) => {
-              if (action.widgets) {
-                action.widgets.forEach((widget: any) => {
-                  if (['bar', 'line', 'pie', 'trend'].includes(widget.type) && widget.data?.data) {
-                    widget.data.data = widget.data.data.map((item: any) => ({
-                      name: item.name || item.date || item.label || item.month || '',
-                      value: typeof item.value === 'number' ? item.value : 
-                             typeof item.amount === 'number' ? item.amount : 0
-                    }));
-                  }
-                });
-              }
-            });
-          }
-          
-          return NextResponse.json(parsed);
-        } catch (e) {
-          console.error('Parse error:', e);
-        }
-      }
-
-      return NextResponse.json({
-        message: reply,
-        actions: []
-      });
-    }
-
-    return NextResponse.json({
-      message: "Invalid API key format",
-      actions: []
-    });
-
-  } catch (error: any) {
-    console.error('❌ Fatal Error:', error);
-    return NextResponse.json({ 
-      message: `Error: ${error.message}`,
-      actions: []
-    });
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return new Response(
+      JSON.stringify({ error: 'GEMINI_API_KEY not configured' }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
   }
+
+  const {
+    message,
+    conversationHistory,
+    dashboardContext,
+    csvData,
+    csvFileName,
+    imageData,
+    imageFileName
+  } = await request.json();
+
+  const canvasContext = buildCanvasContext(dashboardContext);
+  const historyText = formatHistory(conversationHistory ?? []);
+  const systemPrompt = buildSystemPrompt(canvasContext, historyText);
+
+  // Build the parts array for Gemini
+  const parts: any[] = [];
+
+  let userContent = `${systemPrompt}\n\nUSER MESSAGE: "${message}"`;
+
+  if (csvData?.length) {
+    userContent += `\n\nCSV FILE: "${csvFileName}"\n`;
+    userContent += csvData.map((row: string[], idx: number) =>
+      idx === 0 ? `HEADERS: ${row.join(' | ')}` : `Row ${idx}: ${row.join(' | ')}`
+    ).join('\n');
+    userContent += '\n\nUse the EXACT values from this CSV.';
+  }
+
+  if (imageFileName) {
+    userContent += `\n\nIMAGE FILE: "${imageFileName}" - analyze and extract all visible data.`;
+  }
+
+  parts.push({ text: userContent });
+
+  if (imageData) {
+    const base64 = imageData.includes(',') ? imageData.split(',')[1] : imageData;
+    const mimeType = imageData.includes('data:') ? imageData.split(';')[0].split(':')[1] : 'image/jpeg';
+    parts.push({ inline_data: { mime_type: mimeType, data: base64 } });
+  }
+
+  // Call Gemini streaming endpoint with retry for rate limits
+  let geminiResponse: Response | null = null;
+  const maxRetries = 3;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    geminiResponse = await fetch(GEMINI_STREAM_URL(apiKey), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 8192,
+        }
+      })
+    });
+
+    if (geminiResponse.status === 429 && attempt < maxRetries - 1) {
+      // Wait before retrying (exponential backoff: 2s, 6s, 18s)
+      const wait = (attempt + 1) * 2000 * (attempt + 1);
+      console.log(`Rate limited (429), retrying in ${wait}ms (attempt ${attempt + 1}/${maxRetries})...`);
+      await new Promise(r => setTimeout(r, wait));
+      continue;
+    }
+    break;
+  }
+
+  if (!geminiResponse || !geminiResponse.ok) {
+    const error = geminiResponse ? await geminiResponse.text() : 'No response';
+    const status = geminiResponse?.status || 500;
+    console.error('Gemini API error:', status, error.substring(0, 500));
+
+    if (status === 429) {
+      return new Response(
+        JSON.stringify({ error: 'Rate limit exceeded. The free Gemini API quota is temporarily exhausted. Please wait 1-2 minutes and try again.', isRateLimit: true }),
+        { status: 429, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({ error: 'Gemini API error', details: error.substring(0, 300) }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+
+  // Stream the response back to the client
+  const encoder = new TextEncoder();
+  let buffer = '';
+
+  const readable = new ReadableStream({
+    async start(controller) {
+      const reader = geminiResponse.body!.getReader();
+      const decoder = new TextDecoder();
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n');
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const jsonStr = line.slice(6).trim();
+            if (jsonStr === '[DONE]' || !jsonStr) continue;
+
+            try {
+              const parsed = JSON.parse(jsonStr);
+              const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+              if (text) {
+                buffer += text;
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`));
+              }
+            } catch {
+              // skip malformed chunks
+            }
+          }
+        }
+
+        // After stream ends, extract and fix action block from buffer
+        const actionsStart = buffer.indexOf('__ACTIONS_START__');
+        const actionsEnd = buffer.indexOf('__ACTIONS_END__');
+
+        if (actionsStart !== -1 && actionsEnd !== -1) {
+          const actionsJson = buffer
+            .substring(actionsStart + '__ACTIONS_START__'.length, actionsEnd)
+            .trim();
+          try {
+            const rawActions = JSON.parse(actionsJson);
+            const fixedActions = autoFixActions(rawActions);
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ actions: fixedActions })}\n\n`)
+            );
+          } catch {
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ actions: [] })}\n\n`)
+            );
+          }
+        } else {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ actions: [] })}\n\n`)
+          );
+        }
+
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      } catch (err) {
+        controller.error(err);
+      }
+    }
+  });
+
+  return new Response(readable, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    }
+  });
 }
