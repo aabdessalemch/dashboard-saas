@@ -372,6 +372,12 @@ export default function DashboardPage() {
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isSavingRef = useRef(false);
   const isSwitchingProjectRef = useRef(false);
+  const switchRequestIdRef = useRef<number>(0);
+
+  // ── Undo stack for deleted widgets ──
+  const undoStackRef = useRef<{ widget: WidgetPosition; dbId: string | undefined; deleteTimer: NodeJS.Timeout | null }[]>([]);
+  const [undoToast, setUndoToast] = useState<{ widgetType: string; timestamp: number } | null>(null);
+  const undoToastTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const DEFAULT_WIDTH = 450;
   const DEFAULT_HEIGHT = 280;
@@ -401,25 +407,44 @@ const [aiLimit, setAiLimit] = useState({ allowed: true, remaining: 10, resetTime
         filter: `project_id=eq.${selectedProjectId}`,
       },
       async (payload) => {
-        console.log('🔄 Widget change detected:', payload);
-        // ✅ DON'T reload if we're switching projects
+        console.log('🔄 Realtime widget change:', payload);
+
+        // Block if we're switching projects
         if (isSwitchingProjectRef.current) {
-          console.log('⏸️ Skipping reload - project switch in progress');
+          console.log('⏸️ Realtime blocked — project switch in progress');
           return;
         }
-        // ✅ DON'T reload if we're actively editing (have temp widgets)
+
+        // Block if we're saving (prevent echo from our own save)
+        if (isSavingRef.current) {
+          console.log('⏸️ Realtime blocked — currently saving');
+          return;
+        }
+
+        // Block if there are temp (unsaved) widgets
         const hasTempWidgets = widgetsRef.current.some(w => w.id.startsWith('temp-'));
         if (hasTempWidgets) {
-          console.log('⏸️ Skipping reload - temp widgets exist');
+          console.log('⏸️ Realtime blocked — temp widgets exist');
           return;
         }
-        // ✅ DON'T reload if we just saved (prevent loop)
-        if (isSavingRef.current) {
-          console.log('⏸️ Skipping reload - currently saving');
-          return;
-        }
-        // ✅ Only reload if change came from another user/session
+
+        // Capture the current request ID before the async load
+        const currentRequestId = switchRequestIdRef.current;
+
         const dbWidgets = await getWidgets(selectedProjectId);
+
+        // Discard if a project switch happened while we were loading
+        if (currentRequestId !== switchRequestIdRef.current) {
+          console.log('⏸️ Realtime load discarded — project switched during load');
+          return;
+        }
+
+        // Discard if we're now switching again
+        if (isSwitchingProjectRef.current) {
+          console.log('⏸️ Realtime load discarded — switch started during load');
+          return;
+        }
+
         const mappedWidgets = dbWidgets.map(w => ({
           id: w.id,
           type: w.widget_type,
@@ -431,13 +456,16 @@ const [aiLimit, setAiLimit] = useState({ allowed: true, remaining: 10, resetTime
           zIndex: w.z_index,
           data: w.data,
           dbId: w.id,
-          _stableId: w.id,  // Use dbId as stable ID for widgets loaded from DB
+          _stableId: w.id,
         }));
-        console.log('✅ Reloaded widgets from realtime:', mappedWidgets.length);
-        isSavingRef.current = true; // ✅ Prevent save effect from firing
+
+        console.log('✅ Realtime reloaded widgets:', mappedWidgets.length);
+
+        // Block the save effect from re-firing for this update
+        isSavingRef.current = true;
         setWidgets(mappedWidgets);
         setTimeout(() => {
-          isSavingRef.current = false; // ✅ Re-enable after state update settles
+          isSavingRef.current = false;
         }, 1000);
       }
     )
@@ -500,6 +528,20 @@ useEffect(() => {
     }
 
    setUserId(user.id);
+
+// Ensure profiles.email is populated (needed for sharing/lookup)
+if (user.email) {
+  const { error: emailUpdateError } = await supabase
+    .from('profiles')
+    .update({ email: user.email })
+    .eq('id', user.id)
+    .is('email', null);  // Only update if email is currently null
+  
+  if (emailUpdateError) {
+    console.log('⚠️ Could not update profiles.email:', emailUpdateError.message);
+  }
+}
+
 const userProjects = await getProjects(user.id);
 
 // ✅ MAKE SURE THESE 4 LINES ARE HERE:
@@ -684,19 +726,33 @@ useEffect(() => {
 }, [widgets, isLoaded, userId, selectedProjectId]); // ✅ REMOVED scheduleSave from dependencies
 
 const handleProjectSelect = async (projectId: string, projectName: string) => {
-  // Prevent save effect from firing during project switch
-  isSwitchingProjectRef.current = true;
+  // Capture previous project BEFORE any state changes
+  const previousProjectId = selectedProjectIdRef.current;
 
-  // Cancel any pending saves
+  // Assign a unique ID to this switch request
+  const myRequestId = ++switchRequestIdRef.current;
+
+  // Cancel any pending saves from the previous project
   if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
 
-  // Save current project before switching
-  if (userIdRef.current && !selectedProjectIdRef.current.startsWith('guest-')) {
-    await saveToDatabase(selectedProjectIdRef.current, widgetsRef.current);
-  }
+  // Mark as switching to block the realtime listener and save effect
+  isSwitchingProjectRef.current = true;
 
+  // Update UI immediately so the sidebar highlights the new project
   setSelectedProjectId(projectId);
   setSelectedProjectName(projectName);
+  selectedProjectIdRef.current = projectId;
+
+  // Save the PREVIOUS project using the captured variable
+  if (userIdRef.current && !previousProjectId.startsWith('guest-') && previousProjectId !== projectId) {
+    await saveToDatabase(previousProjectId, widgetsRef.current);
+  }
+
+  // If another switch happened while we were saving, abort this one
+  if (myRequestId !== switchRequestIdRef.current) {
+    console.log(`⚡ Switch ${myRequestId} aborted — superseded by ${switchRequestIdRef.current}`);
+    return;
+  }
 
   // Guest/demo mode
   if (projectId === 'guest-1' || !userId) {
@@ -714,43 +770,48 @@ const handleProjectSelect = async (projectId: string, projectName: string) => {
     return;
   }
 
-  // Check if this is owned or shared project
+  // Determine permission
   const isOwnProject = projects.some(p => p.id === projectId);
   const sharedProject = sharedProjects.find(p => p.id === projectId);
-  
   if (sharedProject) {
     setCurrentProjectPermission(sharedProject.permission);
-    console.log('📋 Shared project permission:', sharedProject.permission);
   } else if (isOwnProject) {
     setCurrentProjectPermission('owner');
   } else {
     setCurrentProjectPermission('viewer');
   }
 
-  // Load widgets
+  // Load widgets for the new project
   const dbWidgets = await getWidgets(projectId);
 
+  // CRITICAL: if another switch happened while loading, discard this result
+  if (myRequestId !== switchRequestIdRef.current) {
+    console.log(`⚡ Switch ${myRequestId} load result discarded — superseded by ${switchRequestIdRef.current}`);
+    return;
+  }
+
   const mappedWidgets = dbWidgets.map(w => ({
-    id: w.id, 
-    type: w.widget_type, 
-    x: w.x, 
-    y: w.y, 
-    width: w.width, 
+    id: w.id,
+    type: w.widget_type,
+    x: w.x,
+    y: w.y,
+    width: w.width,
     height: w.height,
-    gridPosition: 0, 
-    zIndex: w.z_index, 
-    data: w.data, 
+    gridPosition: 0,
+    zIndex: w.z_index,
+    data: w.data,
     dbId: w.id,
-    _stableId: w.id,  // Use dbId as stable ID for widgets loaded from DB
+    _stableId: w.id,
   }));
 
   setWidgets(mappedWidgets);
 
-  // Allow save effect to work again after a brief delay
-  // (wait for React to process the setWidgets update)
+  // Allow save effect and realtime listener to work again after settling
   setTimeout(() => {
-    isSwitchingProjectRef.current = false;
-  }, 100);
+    if (myRequestId === switchRequestIdRef.current) {
+      isSwitchingProjectRef.current = false;
+    }
+  }, 500);
 };
 
 const handleProjectsChange = async (updatedProjectsList: Project[]) => {
@@ -1018,27 +1079,87 @@ const addWidget = useCallback((type: string) => {
     return;
   }
 
+  // Find the widget before removing it (for undo)
+  const deletedWidget = widgetsRef.current.find(w => w.id === id);
+
   // Remove from UI immediately
   setWidgets(prev => {
     const updated = prev.filter(w => w.id !== id);
     widgetsRef.current = updated;
     return updated;
   });
-  
-  // Delete from database if it's a real widget (not temp-)
-  if (!id.startsWith('temp-')) {
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (uuidRegex.test(id)) {
-      // Delete immediately
-      dbDeleteWidget(id).catch(err => {
-        console.error('Delete widget error:', err);
-      });
+
+  // Push to undo stack with a delayed DB delete (5s grace period)
+  if (deletedWidget) {
+    let deleteTimer: NodeJS.Timeout | null = null;
+    const isRealWidget = !id.startsWith('temp-') && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
+    if (isRealWidget) {
+      deleteTimer = setTimeout(() => {
+        dbDeleteWidget(id).catch(err => console.error('Delete widget error:', err));
+        // Remove from undo stack after DB delete
+        undoStackRef.current = undoStackRef.current.filter(entry => entry.widget.id !== id);
+      }, 5000);
     }
+
+    undoStackRef.current.push({ widget: deletedWidget, dbId: isRealWidget ? id : undefined, deleteTimer });
+    // Keep stack at max 20 entries
+    if (undoStackRef.current.length > 20) {
+      const removed = undoStackRef.current.shift();
+      // If the oldest entry still has a pending timer, let it run
+    }
+
+    // Show undo toast
+    if (undoToastTimerRef.current) clearTimeout(undoToastTimerRef.current);
+    setUndoToast({ widgetType: deletedWidget.type, timestamp: Date.now() });
+    undoToastTimerRef.current = setTimeout(() => setUndoToast(null), 5000);
   }
   
   // Schedule save for remaining widgets
   scheduleSave();
 }, [currentProjectPermission]);
+
+  const undoLastDelete = useCallback(() => {
+    const entry = undoStackRef.current.pop();
+    if (!entry) return;
+
+    // Cancel the pending DB delete
+    if (entry.deleteTimer) {
+      clearTimeout(entry.deleteTimer);
+    }
+
+    // Re-add widget to UI
+    setWidgets(prev => {
+      const updated = [...prev, entry.widget];
+      widgetsRef.current = updated;
+      return updated;
+    });
+
+    // Hide toast
+    setUndoToast(null);
+    if (undoToastTimerRef.current) clearTimeout(undoToastTimerRef.current);
+
+    // Schedule save to persist the restored widget
+    scheduleSave();
+  }, []);
+
+  // ── Ctrl+Z keyboard listener ──
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+        // Don't intercept if user is typing in an input/textarea
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return;
+
+        if (undoStackRef.current.length > 0) {
+          e.preventDefault();
+          undoLastDelete();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [undoLastDelete]);
 
   const duplicateWidget = useCallback((id: string) => {
     // Check permission
@@ -1298,6 +1419,13 @@ const updateWidgetData = useCallback((id: string, data: any) => {
   });
 }, [userId, aiLimit]);
 
+  const handleAiUsed = useCallback(async () => {
+    if (!userId) return;
+    await incrementAIUsage(userId);
+    const aiStatus = await canUseAI(userId);
+    setAiLimit(aiStatus);
+  }, [userId]);
+
   const handleWidgetAction = useCallback((action: any) => {
     console.log('📩 Widget action received:', action);
     
@@ -1401,6 +1529,7 @@ const updateWidgetData = useCallback((id: string, data: any) => {
   onWidgetAction={handleWidgetAction}
   projectLimit={projectLimit}
   aiLimit={aiLimit}
+  onAiUsed={handleAiUsed}
 />       <div className="flex-1 flex flex-col gap-4">
           <TopBar onAddWidget={addWidget} projectName={selectedProjectName} onOpenAI={() => setShowAIAssistant(true)} onShareClick={() => setShowShareModal(true)} />
           <DashboardCanvas widgets={widgets} onDeleteWidget={deleteWidget} onDuplicateWidget={duplicateWidget} onAddWidget={addWidget} onUpdatePosition={updateWidgetPosition} onUpdateSize={updateWidgetSize} onUpdateData={updateWidgetData} onBringToFront={bringWidgetToFront} permission={currentProjectPermission} activeSPCWidget={activeSPCWidget} onClearActiveSPC={() => setActiveSPCWidget(null)} />
@@ -1418,6 +1547,22 @@ const updateWidgetData = useCallback((id: string, data: any) => {
   projectId={selectedProjectId}
   projectName={selectedProjectName}
   userId={userId || ""}
-/>  </div>
+/>
+      {/* Undo toast */}
+      {undoToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <div className="flex items-center gap-3 bg-slate-800/95 backdrop-blur-xl border border-white/15 rounded-xl px-5 py-3 shadow-2xl">
+            <span className="text-white/70 text-sm">Widget deleted</span>
+            <button
+              onClick={undoLastDelete}
+              className="text-blue-400 hover:text-blue-300 text-sm font-semibold transition-colors flex items-center gap-1.5"
+            >
+              Undo
+              <kbd className="text-[10px] text-white/30 bg-white/10 rounded px-1.5 py-0.5 font-mono">⌘Z</kbd>
+            </button>
+          </div>
+        </div>
+      )}
+  </div>
   );
 }

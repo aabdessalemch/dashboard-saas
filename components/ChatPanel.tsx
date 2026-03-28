@@ -15,9 +15,10 @@ interface ChatPanelProps {
   onWidgetAction: (action: any) => void;
   currentWidgets: any[];
   aiLimit?: { allowed: boolean; remaining: number; resetTime: Date | null };
+  onAiUsed?: () => Promise<void>;
 }
 
-export default function ChatPanel({ onWidgetAction, currentWidgets, aiLimit }: ChatPanelProps) {
+export default function ChatPanel({ onWidgetAction, currentWidgets, aiLimit, onAiUsed }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -130,6 +131,19 @@ export default function ChatPanel({ onWidgetAction, currentWidgets, aiLimit }: C
 
   const handleSend = async () => {
     if ((!input.trim() && !uploadedFile) || isLoading) return;
+
+    // Check AI limit before sending
+    if (aiLimit && !aiLimit.allowed) {
+      const hoursLeft = aiLimit.resetTime 
+        ? Math.ceil((aiLimit.resetTime.getTime() - Date.now()) / (1000 * 60 * 60)) 
+        : 0;
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: `🚫 Free AI limit reached! You've used all 10 AI messages for today. Your limit resets in ${hoursLeft} hours. Upgrade to Pro for unlimited AI!`,
+        timestamp: Date.now()
+      }]);
+      return;
+    }
 
     const userMessage: Message = {
       role: 'user',
@@ -292,6 +306,11 @@ export default function ChatPanel({ onWidgetAction, currentWidgets, aiLimit }: C
             onWidgetAction(action);
           }
         }
+      }
+
+      // Increment AI usage after successful response
+      if (onAiUsed) {
+        await onAiUsed();
       }
 
     } catch (error: any) {

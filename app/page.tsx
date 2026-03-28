@@ -310,10 +310,10 @@ export default function Home() {
                 </div>
                 <h4 className="text-white text-lg font-semibold mb-2">Email</h4>
                 <a
-                  href="mailto:aabdessalem.chaouch@gmail.com"
+                  href="mailto:abdesslem@ttd.vision"
                   className="text-gray-300 hover:text-white transition-colors text-base font-light"
                 >
-                  aabdessalem.chaouch@gmail.com
+                  abdesslem@ttd.vision
                 </a>
               </div>
 

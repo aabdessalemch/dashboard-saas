@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+export { getSharedProjects } from './sharing';
 
 export interface Widget {
   id: string;
@@ -50,75 +51,6 @@ export async function getProjects(userId: string): Promise<Project[]> {
   return data || [];
 }
 
-export async function getSharedProjects(userId: string): Promise<(Project & { permission: 'viewer' | 'editor'; owner_email: string })[]> {
-  try {
-    console.log('🔍 getSharedProjects called with userId:', userId);
-    // Get user's email first
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('email')
-      .eq('id', userId)
-      .single();
-
-    console.log('🔍 profile result:', { profile, profileError });
-
-    if (profileError || !profile?.email) {
-      console.log('Profile not found or error:', profileError?.message);
-      return [];
-    }
-
-    // Get shares by BOTH user ID and email (belt and suspenders approach)
-    const { data: shares, error: sharesError } = await supabase
-      .from('project_shares')
-      .select('*')
-      .or(`shared_with_id.eq.${userId},shared_with_email.ilike.${profile.email}`);
-
-    console.log('🔍 shares result:', { shares, sharesError });
-
-    if (sharesError) {
-      console.error('Error fetching shares:', sharesError);
-      return [];
-    }
-
-    if (!shares || shares.length === 0) {
-      return [];
-    }
-
-    // Get all project details
-    const projectIds = shares.map(s => s.project_id);
-    const { data: projects, error: projectsError } = await supabase
-      .from('projects')
-      .select('*')
-      .in('id', projectIds);
-
-    console.log('🔍 projects result:', { projects, projectsError });
-
-    if (projectsError) {
-      console.error('Error fetching projects:', projectsError);
-      return [];
-    }
-
-    // Combine and return
-    return shares.map(share => {
-      const project = projects?.find(p => p.id === share.project_id);
-      if (!project) return null;
-      
-      return {
-        id: project.id,
-        user_id: project.user_id,
-        name: project.name,
-        created_at: project.created_at,
-        folder_id: project.folder_id,
-        position: project.position,
-        permission: share.permission as 'viewer' | 'editor',
-        owner_email: share.shared_with_email
-      };
-    }).filter(Boolean) as (Project & { permission: 'viewer' | 'editor'; owner_email: string })[];
-  } catch (err) {
-    console.error('Exception in getSharedProjects:', err);
-    return [];
-  }
-}
 export async function createProject(userId: string, name: string, folderId?: string): Promise<Project | null> {
   const { data, error } = await supabase
     .from('projects')
@@ -370,10 +302,13 @@ export async function getUserSubscription(userId: string) {
       console.error('Error fetching subscription:', error);
       
       if (error.code === 'PGRST116') {
+        // Get user email from auth to include in profile
+        const { data: { user: authUser } } = await supabase.auth.getUser();
         const { data: newProfile, error: insertError } = await supabase
           .from('profiles')
           .insert([{ 
             id: userId, 
+            email: authUser?.email ?? null,
             subscription_tier: 'free', 
             ai_generation_count: 0, 
             ai_generation_reset_at: new Date().toISOString() 

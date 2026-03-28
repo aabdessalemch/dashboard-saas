@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceLine, ReferenceArea, AreaChart, Area, BarChart, Bar, Cell, Scatter,
+  ResponsiveContainer, ReferenceLine, ReferenceArea, AreaChart, Area, BarChart, Bar, Cell,
 } from "recharts";
 import { X, Eye, EyeOff } from "lucide-react";
 import {
@@ -102,11 +102,30 @@ export default function SPCPanel({ data, chartType, onClose, initialLimits, onLi
   };
 
   // ── Derived SPC data ──
-  const values = useMemo(() => data.map(d => d.value), [data]);
+  const values = useMemo(() => data.map(d => {
+    const v = Number(d.value);
+    return isFinite(v) ? v : 0;
+  }), [data]);
   const labels = useMemo(() => data.map(d => d.name), [data]);
   const stats = useMemo(() => calculateSPCStats(values), [values]);
   const chartRec = useMemo(() => detectSPCChartType(values, chartType), [values, chartType]);
   // Note: rulesResult is defined below after usl/lsl state (needs adjustedStats)
+
+  // Compute the actual data range to anchor slider bounds
+  const dataMin = useMemo(() => Math.min(...values), [values]);
+  const dataMax = useMemo(() => Math.max(...values), [values]);
+
+  // Slider bounds: always wide enough to cover the actual data
+  // Use whichever is larger: 4σ padding OR the actual data extent
+  const sliderPadding = useMemo(() => {
+    const sigmaSpread = 4 * stats.sigma;
+    const dataSpread  = (dataMax - dataMin) * 0.5;
+    return Math.max(sigmaSpread, dataSpread, 1);
+  }, [stats.sigma, dataMin, dataMax]);
+
+  const sliderMin = useMemo(() => dataMin - sliderPadding, [dataMin, sliderPadding]);
+  const sliderMax = useMemo(() => dataMax + sliderPadding, [dataMax, sliderPadding]);
+  const sliderSpan = useMemo(() => sliderMax - sliderMin, [sliderMax, sliderMin]);
 
   // ── Cp/Cpk slider helpers ──
   const sliderStep = useMemo(() => {
@@ -123,15 +142,18 @@ export default function SPCPanel({ data, chartType, onClose, initialLimits, onLi
     if (!isFinite(v) || isNaN(v)) return '0';
     const abs = Math.abs(v);
     if (abs === 0) return '0';
+    if (abs >= 1_000_000_000_000) return (v / 1_000_000_000_000).toFixed(1) + 'T';
     if (abs >= 1_000_000_000) return (v / 1_000_000_000).toFixed(1) + 'B';
     if (abs >= 1_000_000) return (v / 1_000_000).toFixed(1) + 'M';
+    if (abs >= 10_000) return (v / 1_000).toFixed(0) + 'K';
     if (abs >= 1_000) return (v / 1_000).toFixed(1) + 'K';
     if (abs >= 100) return Math.round(v).toString();
     if (abs >= 10) return v.toFixed(1);
     if (abs >= 1) return v.toFixed(2);
-    // For fractional data, show enough precision
+    if (abs >= 0.01) return v.toFixed(3);
+    // For very small fractional data
     const decimals = Math.max(2, -Math.floor(Math.log10(abs)) + 2);
-    return v.toFixed(Math.min(decimals, 4));
+    return v.toFixed(Math.min(decimals, 6));
   }, []);
 
   // Compact formatter for Cp/Cpk/Sigma ratios (normally 0–6 but can explode)
@@ -151,19 +173,28 @@ export default function SPCPanel({ data, chartType, onClose, initialLimits, onLi
     return Math.max(stats.mean - maxRange, Math.min(stats.mean + maxRange, v));
   }, [stats.mean, stats.sigma]);
 
-  const [usl, setUslRaw] = useState(() =>
-    clampLimit(
-      initialLimits?.usl ?? NaN,
-      stats.mean + 3 * stats.sigma
-    )
-  );
+  const [usl, setUslRaw] = useState(() => {
+    const saved = initialLimits?.usl;
+    // Accept saved value only if it is above the mean (USL below mean is nonsensical)
+    if (saved != null && isFinite(saved) && saved > stats.mean) {
+      return saved;
+    }
+    // Default: midpoint between mean and data max, or mean + 3σ, whichever is larger
+    return Math.max(stats.mean + 3 * stats.sigma, stats.mean + (dataMax - stats.mean) * 0.5);
+  });
 
-  const [lsl, setLslRaw] = useState(() =>
-    clampLimit(
-      initialLimits?.lsl ?? NaN,
-      stats.mean - 3 * stats.sigma
-    )
-  );
+  const [lsl, setLslRaw] = useState(() => {
+    const saved = initialLimits?.lsl;
+    // Accept saved value only if it is below the mean (LSL above mean is nonsensical)
+    if (saved != null && isFinite(saved) && saved < stats.mean) {
+      return saved;
+    }
+    // Default: midpoint between data min and mean, or mean - 3σ, whichever is lower
+    return Math.min(
+      stats.mean - 3 * stats.sigma,
+      stats.mean - (stats.mean - dataMin) * 0.5
+    );
+  });
 
   const setUsl = useCallback((v: number) => {
     setUslRaw(v);
@@ -175,23 +206,45 @@ export default function SPCPanel({ data, chartType, onClose, initialLimits, onLi
     onLimitsChange?.(usl, v);
   }, [usl, onLimitsChange]);
 
-  // ── Adjusted stats: use user's USL/LSL as control limits for Nelson rules ──
-  const adjustedStats = useMemo<SPCStats>(() => {
-    const halfSpreadUpper = (usl - stats.mean) / 3;
-    const halfSpreadLower = (stats.mean - lsl) / 3;
-    return {
-      ...stats,
-      ucl: usl,
-      lcl: lsl,
-      zone2Upper: stats.mean + 2 * halfSpreadUpper,
-      zone2Lower: stats.mean - 2 * halfSpreadLower,
-      zone1Upper: stats.mean + halfSpreadUpper,
-      zone1Lower: stats.mean - halfSpreadLower,
-    };
-  }, [stats, usl, lsl]);
+  // ── Sync USL/LSL when stats change (e.g. data updated) and no user-set limits ──
+  const prevMeanRef = useRef(stats.mean);
+  useEffect(() => {
+    // Only auto-sync if there are no persisted user limits
+    if (initialLimits?.usl != null && isFinite(initialLimits.usl)) return;
+    if (prevMeanRef.current !== stats.mean) {
+      prevMeanRef.current = stats.mean;
+      setUslRaw(Math.max(stats.mean + 3 * stats.sigma, stats.mean + (dataMax - stats.mean) * 0.5));
+      setLslRaw(Math.min(stats.mean - 3 * stats.sigma, stats.mean - (stats.mean - dataMin) * 0.5));
+    }
+  }, [stats.mean, stats.sigma, dataMin, dataMax, initialLimits]);
+
+  // ── Adjusted stats: pass through process control limits as-is ──
+  // Nelson rules must evaluate against process-derived UCL/LCL, never spec limits.
+  // USL/LSL are rendered as separate reference lines in the chart.
+  const adjustedStats = useMemo<SPCStats>(() => stats, [stats]);
 
   const rulesResult = useMemo(() => runAllNelsonRules(values, labels, adjustedStats), [values, labels, adjustedStats]);
   const capability = useMemo(() => calculateCapability(values, stats, usl, lsl), [values, stats, usl, lsl]);
+
+  // Y-axis domain for SPC chart: must include data range + all limit lines (UCL, LCL, USL, LSL)
+  const spcYDomain = useMemo<[number, number]>(() => {
+    const allValues = [
+      ...values,
+      stats.ucl, stats.lcl, stats.mean,
+      usl, lsl,
+    ].filter(v => isFinite(v));
+    const lo = Math.min(...allValues);
+    const hi = Math.max(...allValues);
+    const pad = (hi - lo) * 0.08 || 1;
+    return [lo - pad, hi + pad];
+  }, [values, stats.ucl, stats.lcl, stats.mean, usl, lsl]);
+
+  // Process stability check: any critical or warning violation = unstable
+  const isProcessStable = useMemo(() => {
+    return !rulesResult.results.some(
+      r => r.fired && (r.severity === 'critical' || r.severity === 'warning')
+    );
+  }, [rulesResult]);
 
   // ── AI insight: instant fallback + debounced Gemini call ──
   const geminiTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -285,8 +338,8 @@ export default function SPCPanel({ data, chartType, onClose, initialLimits, onLi
   const confidenceZ = confidenceLevel === 95 ? 1.96 : 1.28;
   const forecastResult = useMemo<ForecastResult | null>(() => {
     if (data.length < 6) return null; // not enough data
-    return calculateForecast(values, labels, adjustedStats, forecastHorizon, confidenceZ);
-  }, [values, labels, adjustedStats, forecastHorizon, confidenceZ, data.length]);
+    return calculateForecast(values, labels, adjustedStats, forecastHorizon, confidenceZ, { usl, lsl });
+  }, [values, labels, adjustedStats, forecastHorizon, confidenceZ, usl, lsl, data.length]);
 
   // ── Premortem: merged dataset (historical + forecast) ──
   const mergedDataset = useMemo(() => {
@@ -316,10 +369,19 @@ export default function SPCPanel({ data, chartType, onClose, initialLimits, onLi
       lowerBand: p.lowerBand,
       willBreach: p.willBreach,
       isEarlyWarning: p.isEarlyWarning,
+      breachType: p.breachType,
+      breachesControl: p.breachesControl,
+      breachesSpec: p.breachesSpec,
       isForecast: true,
     }));
     return [...hist, ...fc];
   }, [data, forecastResult]);
+
+  // ── Premortem: reset insight when spec limits change ──
+  useEffect(() => {
+    premortLoadedRef.current = false;
+    setPremortInsight('');
+  }, [usl, lsl]);
 
   // ── Premortem: Gemini insight (fetch once when tab first opens) ──
   useEffect(() => {
@@ -331,13 +393,19 @@ export default function SPCPanel({ data, chartType, onClose, initialLimits, onLi
 
 Forecast summary:
 - Slope: ${forecastResult.slope.toFixed(4)} per period
-- Predicted breaches: ${forecastResult.breachCount} of ${forecastResult.points.length} forecast points
-- First breach: ${forecastResult.firstBreachLabel ?? 'none'} (${forecastResult.firstBreachDirection ?? 'n/a'})
+- Total predicted breaches: ${forecastResult.breachCount} of ${forecastResult.points.length} points
+- Control limit breaches (UCL/LCL): ${forecastResult.controlBreachCount}
+  First at: ${forecastResult.firstControlBreachLabel ?? 'none'} (${forecastResult.firstControlBreachDirection ?? 'n/a'})
+- Spec limit breaches (USL/LSL): ${forecastResult.specBreachCount}
+  First at: ${forecastResult.firstSpecBreachLabel ?? 'none'} (${forecastResult.firstSpecBreachDirection ?? 'n/a'})
 - Current mean: ${stats.mean.toFixed(1)}, sigma: ${stats.sigma.toFixed(1)}
+- UCL: ${stats.ucl.toFixed(1)}, LCL: ${stats.lcl.toFixed(1)}
 - USL: ${usl.toFixed(1)}, LSL: ${lsl.toFixed(1)}
 - Confidence level: ${confidenceLevel}%
 
-Write 2-3 sentences of actionable premortem analysis. What should the team watch out for? What interventions might prevent the predicted breach? Be specific and avoid generic advice. Do not start with "I" or "The analysis".`.trim();
+Write 2-3 sentences of actionable premortem analysis distinguishing between
+process control issues (UCL/LCL) and product specification issues (USL/LSL).
+What should the team prioritize? Be specific. Do not start with "I" or "The analysis".`.trim();
 
     fetch('/api/spc-insight', {
       method: 'POST',
@@ -345,16 +413,39 @@ Write 2-3 sentences of actionable premortem analysis. What should the team watch
       body: JSON.stringify({ prompt }),
     })
       .then(res => res.ok ? res.json() : null)
-      .then(json => setPremortInsight(json?.insight ?? premortFallback(forecastResult)))
+      .then(json => setPremortInsight(json?.insight || premortFallback(forecastResult)))
       .catch(() => setPremortInsight(premortFallback(forecastResult)))
       .finally(() => setLoadingPremort(false));
   }, [activeTab, forecastResult, data.length, stats, usl, lsl, confidenceLevel]);
 
   function premortFallback(fr: ForecastResult): string {
     if (fr.allGreen) {
-      return `The forecast projects all ${fr.points.length} future points within control limits. The process trend appears stable — continue monitoring, but no immediate intervention is needed.`;
+      return `The forecast projects all ${fr.points.length} future points within both control ` +
+        `and spec limits. The process trend appears stable — continue monitoring, ` +
+        `but no immediate intervention is needed.`;
     }
-    return `The forecast predicts ${fr.breachCount} breach${fr.breachCount > 1 ? 'es' : ''}, with the first at ${fr.firstBreachLabel} (${fr.firstBreachDirection} the limit). A slope of ${fr.slope.toFixed(4)} per period suggests gradual drift — consider preemptive calibration or process adjustment.`;
+
+    const parts: string[] = [];
+
+    if (fr.controlBreachCount > 0) {
+      parts.push(
+        `${fr.controlBreachCount} control limit breach${fr.controlBreachCount > 1 ? 'es' : ''} ` +
+        `predicted — first at ${fr.firstControlBreachLabel} (${fr.firstControlBreachDirection} UCL/LCL)`
+      );
+    }
+
+    if (fr.specBreachCount > 0) {
+      parts.push(
+        `${fr.specBreachCount} spec limit breach${fr.specBreachCount > 1 ? 'es' : ''} ` +
+        `predicted — first at ${fr.firstSpecBreachLabel} (${fr.firstSpecBreachDirection} USL/LSL)`
+      );
+    }
+
+    return `Forecast detects ${parts.join(' and ')}. ` +
+      `A slope of ${fr.slope.toFixed(3)} per period indicates ` +
+      `${Math.abs(fr.slope) < 0.5 ? 'gradual' : 'significant'} ` +
+      `${fr.slope > 0 ? 'upward' : 'downward'} drift — ` +
+      `preemptive calibration or process adjustment is recommended.`;
   }
 
   // ── Tabs ──
@@ -424,10 +515,12 @@ Write 2-3 sentences of actionable premortem analysis. What should the team watch
       {activeTab === 'sideBySide' && (
         <div>
           {/* Stats row */}
-          <div className="grid grid-cols-4 gap-3 mb-5">
+          <div className="grid grid-cols-3 gap-3 mb-5">
             <StatCard label="Mean (CL)" value={formatStat(stats.mean)} color="#97C459" />
-            <StatCard label="UCL" value={formatStat(usl)} color="#f87171" />
-            <StatCard label="LCL" value={formatStat(lsl)} color="#60a5fa" />
+            <StatCard label="UCL (3σ)" value={formatStat(stats.ucl)} color="#f87171" />
+            <StatCard label="LCL (3σ)" value={formatStat(Math.max(0, stats.lcl))} color="#60a5fa" />
+            <StatCard label="USL" value={formatStat(usl)} color="#fb923c" />
+            <StatCard label="LSL" value={formatStat(lsl)} color="#38bdf8" />
             <StatCard label="Sigma (σ)" value={formatStat(stats.sigma)} color="#ffffff" />
           </div>
 
@@ -473,7 +566,7 @@ Write 2-3 sentences of actionable premortem analysis. What should the team watch
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                   <XAxis dataKey="name" stroke="rgba(255,255,255,0.35)" tick={{ fontSize: 10 }} />
-                  <YAxis stroke="rgba(255,255,255,0.35)" tick={{ fontSize: 10 }} tickFormatter={formatStat} />
+                  <YAxis stroke="rgba(255,255,255,0.35)" tick={{ fontSize: 10 }} tickFormatter={formatStat} domain={spcYDomain} />
                   <Tooltip
                     contentStyle={{ backgroundColor: 'rgba(0,0,0,0.85)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', fontSize: 11 }}
                     labelStyle={{ color: '#fff' }}
@@ -482,9 +575,13 @@ Write 2-3 sentences of actionable premortem analysis. What should the team watch
                       return [formatStat(val), name === 'forecast' ? 'Forecast' : name === 'historical' ? 'Actual' : 'Value'];
                     }}
                   />
-                  <ReferenceLine y={usl} stroke="#f87171" strokeDasharray="4 3" label={{ value: 'UCL', fill: '#f87171', fontSize: 10, position: 'right' }} />
+                  {/* Process control limits */}
+                  <ReferenceLine y={stats.ucl} stroke="#f87171" strokeDasharray="4 3" label={{ value: 'UCL', fill: '#f87171', fontSize: 10, position: 'right' }} />
                   <ReferenceLine y={stats.mean} stroke="#97C459" strokeDasharray="4 3" label={{ value: 'CL', fill: '#97C459', fontSize: 10, position: 'right' }} />
-                  <ReferenceLine y={lsl} stroke="#60a5fa" strokeDasharray="4 3" label={{ value: 'LCL', fill: '#60a5fa', fontSize: 10, position: 'right' }} />
+                  <ReferenceLine y={Math.max(0, stats.lcl)} stroke="#60a5fa" strokeDasharray="4 3" label={{ value: 'LCL', fill: '#60a5fa', fontSize: 10, position: 'right' }} />
+                  {/* Spec limits (user-adjustable via Cp/Cpk tab) */}
+                  <ReferenceLine y={usl} stroke="#fb923c" strokeDasharray="6 3" strokeWidth={1.5} label={{ value: `USL ${formatStat(usl)}`, fill: '#fb923c', fontSize: 9, position: 'right' }} />
+                  <ReferenceLine y={lsl} stroke="#38bdf8" strokeDasharray="6 3" strokeWidth={1.5} label={{ value: `LSL ${formatStat(lsl)}`, fill: '#38bdf8', fontSize: 9, position: 'right' }} />
 
                   {/* When forecast overlay is ON, show "Now" separator and forecast elements */}
                   {showPremortem && forecastResult && data.length > 0 && (
@@ -498,7 +595,27 @@ Write 2-3 sentences of actionable premortem analysis. What should the team watch
                   {showPremortem && forecastResult ? (
                     <>
                       <Line type="monotone" dataKey="historical" stroke="#f59e0b" strokeWidth={2} dot={renderSPCDot} activeDot={false} connectNulls={false} isAnimationActive={false} />
-                      <Line type="monotone" dataKey="forecast" stroke="#c4b5fd" strokeWidth={2} strokeDasharray="6 3" dot={false} connectNulls={false} isAnimationActive={false} />
+                      <Line
+                        type="monotone"
+                        dataKey="forecast"
+                        stroke="#c4b5fd"
+                        strokeWidth={2}
+                        strokeDasharray="6 3"
+                        connectNulls={false}
+                        isAnimationActive={false}
+                        dot={(props: any) => {
+                          const { cx, cy, payload } = props;
+                          if (!payload?.isForecast || cx == null || cy == null) return <g key={`dot-skip-${cx}-${cy}`} />;
+                          if (payload.historical != null) return <g key={`dot-bridge-${cx}-${cy}`} />;
+                          let fill = 'rgba(99,153,34,0.75)';
+                          if (payload.breachType === 'both') fill = 'rgba(217,70,239,0.85)';
+                          else if (payload.breachType === 'control') fill = 'rgba(248,113,113,0.85)';
+                          else if (payload.breachType === 'spec') fill = 'rgba(251,146,60,0.85)';
+                          else if (payload.isEarlyWarning) fill = 'rgba(251,191,36,0.75)';
+                          return <circle key={`dot-fc-${cx}-${cy}`} cx={cx} cy={cy} r={4} fill={fill} stroke="rgba(255,255,255,0.2)" strokeWidth={1} />;
+                        }}
+                        activeDot={false}
+                      />
                     </>
                   ) : (
                     <Line type="monotone" dataKey="value" stroke="#f59e0b" strokeWidth={2} dot={renderSPCDot} activeDot={false} />
@@ -599,6 +716,17 @@ Write 2-3 sentences of actionable premortem analysis. What should the team watch
       {/* ════════════════ TAB 3 — Cp / Cpk ════════════════ */}
       {activeTab === 'cpk' && (
         <div>
+          {/* Process stability warning */}
+          {!isProcessStable && (
+            <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 mb-4 text-red-300 text-xs leading-relaxed">
+              <strong>Process not in statistical control.</strong>{' '}
+              {rulesResult.violationCount} Nelson rule violation
+              {rulesResult.violationCount > 1 ? 's' : ''} detected.
+              Cp/Cpk values are mathematically computed but statistically unreliable
+              on an unstable process. Resolve control violations before interpreting
+              capability results.
+            </div>
+          )}
           {/* Spec limit note */}
           <div className="bg-white/5 rounded-xl px-4 py-3 mb-4 text-white/50 text-xs leading-relaxed">
             USL and LSL come from your product requirements, not from the data. Adjust the sliders to match your process tolerances.
@@ -613,11 +741,11 @@ Write 2-3 sentences of actionable premortem analysis. What should the team watch
                   type="range"
                   min={0}
                   max={100}
-                  value={stats.sigma === 0 ? 50 : Math.max(0, Math.min(100, ((usl - (stats.mean - 5 * stats.sigma)) / (10 * stats.sigma)) * 100))}
+                  value={sliderSpan === 0 ? 50 : Math.max(0, Math.min(100, ((usl - sliderMin) / sliderSpan) * 100))}
                   onChange={e => {
                     const pct = Number(e.target.value) / 100;
-                    const newVal = (stats.mean - 5 * stats.sigma) + pct * 10 * stats.sigma;
-                    // Clamp: USL must be above mean
+                    const newVal = sliderMin + pct * sliderSpan;
+                    // USL must always stay above the mean
                     setUsl(Math.max(stats.mean + stats.sigma * 0.1, newVal));
                   }}
                   className="flex-1 h-1.5 rounded-full appearance-none cursor-pointer"
@@ -633,11 +761,11 @@ Write 2-3 sentences of actionable premortem analysis. What should the team watch
                   type="range"
                   min={0}
                   max={100}
-                  value={stats.sigma === 0 ? 50 : Math.max(0, Math.min(100, ((lsl - (stats.mean - 5 * stats.sigma)) / (10 * stats.sigma)) * 100))}
+                  value={sliderSpan === 0 ? 50 : Math.max(0, Math.min(100, ((lsl - sliderMin) / sliderSpan) * 100))}
                   onChange={e => {
                     const pct = Number(e.target.value) / 100;
-                    const newVal = (stats.mean - 5 * stats.sigma) + pct * 10 * stats.sigma;
-                    // Clamp: LSL must be below mean
+                    const newVal = sliderMin + pct * sliderSpan;
+                    // LSL must always stay below the mean
                     setLsl(Math.min(stats.mean - stats.sigma * 0.1, newVal));
                   }}
                   className="flex-1 h-1.5 rounded-full appearance-none cursor-pointer"
@@ -783,7 +911,7 @@ Write 2-3 sentences of actionable premortem analysis. What should the team watch
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                 <XAxis dataKey="name" stroke="rgba(255,255,255,0.35)" tick={{ fontSize: 9 }} />
-                <YAxis stroke="rgba(255,255,255,0.35)" tick={{ fontSize: 10 }} tickFormatter={formatStat} />
+                <YAxis stroke="rgba(255,255,255,0.35)" tick={{ fontSize: 10 }} tickFormatter={formatStat} domain={spcYDomain} />
                 <Tooltip
                   contentStyle={{ backgroundColor: 'rgba(0,0,0,0.85)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', fontSize: 11 }}
                   labelStyle={{ color: '#fff' }}
@@ -824,10 +952,13 @@ Write 2-3 sentences of actionable premortem analysis. What should the team watch
                   isAnimationActive={false}
                 />
 
-                {/* Control lines */}
-                <ReferenceLine y={usl} stroke="#f87171" strokeDasharray="4 3" label={{ value: 'USL', fill: '#f87171', fontSize: 9, position: 'right' }} />
+                {/* Process control limits (solid dash — process-derived) */}
+                <ReferenceLine y={stats.ucl} stroke="#f87171" strokeDasharray="4 3" label={{ value: 'UCL', fill: '#f87171', fontSize: 9, position: 'right' }} />
                 <ReferenceLine y={stats.mean} stroke="#97C459" strokeDasharray="4 3" label={{ value: 'CL', fill: '#97C459', fontSize: 9, position: 'right' }} />
-                <ReferenceLine y={lsl} stroke="#60a5fa" strokeDasharray="4 3" label={{ value: 'LSL', fill: '#60a5fa', fontSize: 9, position: 'right' }} />
+                <ReferenceLine y={Math.max(0, stats.lcl)} stroke="#60a5fa" strokeDasharray="4 3" label={{ value: 'LCL', fill: '#60a5fa', fontSize: 9, position: 'right' }} />
+                {/* Spec limits (lighter dash — user-set, matches Side by Side style) */}
+                <ReferenceLine y={usl} stroke="#fb923c" strokeDasharray="6 3" strokeWidth={1.5} label={{ value: `USL ${formatStat(usl)}`, fill: '#fb923c', fontSize: 9, position: 'right' }} />
+                <ReferenceLine y={lsl} stroke="#38bdf8" strokeDasharray="6 3" strokeWidth={1.5} label={{ value: `LSL ${formatStat(lsl)}`, fill: '#38bdf8', fontSize: 9, position: 'right' }} />
 
                 {/* "Now" separator */}
                 {data.length > 0 && (
@@ -850,37 +981,76 @@ Write 2-3 sentences of actionable premortem analysis. What should the team watch
                   isAnimationActive={false}
                 />
 
-                {/* Forecast line */}
+                {/* Forecast line with colored dots by breach type */}
                 <Line
                   type="monotone"
                   dataKey="forecast"
                   stroke="#c4b5fd"
                   strokeWidth={2}
                   strokeDasharray="6 3"
-                  dot={false}
                   connectNulls={false}
                   isAnimationActive={false}
-                />
-
-                {/* Forecast dots — colored by risk */}
-                <Scatter
-                  dataKey="forecast"
-                  isAnimationActive={false}
-                  shape={(props: any) => {
+                  dot={(props: any) => {
                     const { cx, cy, payload } = props;
-                    if (!payload?.isForecast || cx == null || cy == null) return null;
-                    let fill = 'rgba(99,153,34,0.6)';  // green
-                    if (payload.willBreach) fill = 'rgba(248,113,113,0.6)';  // red
-                    else if (payload.isEarlyWarning) fill = 'rgba(251,191,36,0.6)';  // amber
-                    return <circle cx={cx} cy={cy} r={5} fill={fill} stroke="rgba(255,255,255,0.15)" strokeWidth={1} />;
+                    // Only render dots for actual forecast points, not the bridge point
+                    if (!payload?.isForecast || cx == null || cy == null) return <g key={`dot-skip-${cx}-${cy}`} />;
+                    // Skip bridge point (it has both historical and forecast values)
+                    if (payload.historical != null) return <g key={`dot-bridge-${cx}-${cy}`} />;
+
+                    let fill = 'rgba(99,153,34,0.75)';         // green — within all limits
+                    if (payload.breachType === 'both')
+                      fill = 'rgba(217,70,239,0.85)';           // fuchsia — both control + spec
+                    else if (payload.breachType === 'control')
+                      fill = 'rgba(248,113,113,0.85)';          // red — UCL/LCL breach
+                    else if (payload.breachType === 'spec')
+                      fill = 'rgba(251,146,60,0.85)';           // orange — USL/LSL breach
+                    else if (payload.isEarlyWarning)
+                      fill = 'rgba(251,191,36,0.75)';           // amber — 2σ zone warning
+
+                    return (
+                      <circle
+                        key={`dot-forecast-${cx}-${cy}`}
+                        cx={cx}
+                        cy={cy}
+                        r={5}
+                        fill={fill}
+                        stroke="rgba(255,255,255,0.2)"
+                        strokeWidth={1}
+                      />
+                    );
                   }}
+                  activeDot={false}
                 />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
 
-          {/* ── Summary cards 2×2 ── */}
-          <div className="grid grid-cols-2 gap-3 mb-5">
+          {/* Dot color legend */}
+          <div className="flex flex-wrap gap-3 px-1 mb-4 text-[10px] text-white/50">
+            <span className="flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-full inline-block" style={{ background: 'rgba(99,153,34,0.75)' }} />
+              Within all limits
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-full inline-block" style={{ background: 'rgba(251,191,36,0.75)' }} />
+              Early warning (2σ zone)
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-full inline-block" style={{ background: 'rgba(251,146,60,0.85)' }} />
+              Spec breach (USL/LSL)
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-full inline-block" style={{ background: 'rgba(248,113,113,0.85)' }} />
+              Control breach (UCL/LCL)
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-full inline-block" style={{ background: 'rgba(217,70,239,0.85)' }} />
+              Both limits breached
+            </span>
+          </div>
+
+          {/* ── Summary cards 3×2 ── */}
+          <div className="grid grid-cols-3 gap-3 mb-5">
             <div className="bg-white/5 rounded-xl p-3 overflow-hidden">
               <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">Forecast trend</p>
               <p className={`text-lg font-bold truncate ${forecastResult.slope > 0 ? 'text-amber-400' : forecastResult.slope < 0 ? 'text-blue-400' : 'text-white/60'}`}>
@@ -888,7 +1058,7 @@ Write 2-3 sentences of actionable premortem analysis. What should the team watch
               </p>
             </div>
             <div className="bg-white/5 rounded-xl p-3 overflow-hidden">
-              <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">Predicted breach</p>
+              <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">First breach</p>
               <p className={`text-lg font-bold truncate ${forecastResult.allGreen ? 'text-green-400' : 'text-red-400'}`}>
                 {forecastResult.firstBreachLabel ?? 'None'}
                 {forecastResult.firstBreachDirection && (
@@ -910,6 +1080,20 @@ Write 2-3 sentences of actionable premortem analysis. What should the team watch
                 {forecastResult.points.filter(p => p.isEarlyWarning).length} early warnings
               </p>
             </div>
+            <div className="bg-white/5 rounded-xl p-3 overflow-hidden">
+              <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">Control breaches</p>
+              <p className={`text-lg font-bold truncate ${forecastResult.controlBreachCount > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                {forecastResult.controlBreachCount}
+              </p>
+              <p className="text-[10px] text-white/30 truncate">UCL / LCL</p>
+            </div>
+            <div className="bg-white/5 rounded-xl p-3 overflow-hidden">
+              <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">Spec breaches</p>
+              <p className={`text-lg font-bold truncate ${forecastResult.specBreachCount > 0 ? 'text-orange-400' : 'text-green-400'}`}>
+                {forecastResult.specBreachCount}
+              </p>
+              <p className="text-[10px] text-white/30 truncate">USL / LSL</p>
+            </div>
           </div>
 
           {/* ── Alert box ── */}
@@ -918,17 +1102,43 @@ Write 2-3 sentences of actionable premortem analysis. What should the team watch
               <span className="text-green-400 text-base mt-[-1px]">✓</span>
               <span>
                 <strong>All clear.</strong> The forecast projects all {forecastResult.points.length} future points
-                within control limits. No predicted breaches at {confidenceLevel}% confidence — process appears on a stable trajectory.
+                within both control and spec limits. No predicted breaches at {confidenceLevel}% confidence — process appears on a stable trajectory.
               </span>
             </div>
           ) : (
-            <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 mb-5 text-red-300 text-xs leading-relaxed flex items-start gap-2">
-              <span className="text-red-400 text-base mt-[-1px]">⚠</span>
-              <span>
-                <strong>Breach predicted.</strong> {forecastResult.breachCount} of {forecastResult.points.length} forecast
-                points exceed control limits. First expected breach at <strong>{forecastResult.firstBreachLabel}</strong> ({forecastResult.firstBreachDirection} the limit).
-                Preemptive action is recommended.
-              </span>
+            <div className="space-y-2 mb-5">
+              {/* Control limit breach alert */}
+              {forecastResult.controlBreachCount > 0 && (
+                <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 text-red-300 text-xs leading-relaxed flex items-start gap-2">
+                  <span className="text-red-400 text-base mt-[-1px]">⚠</span>
+                  <span>
+                    <strong>Process control breach predicted.</strong> {forecastResult.controlBreachCount} of {forecastResult.points.length} forecast
+                    points exceed UCL/LCL. First at <strong>{forecastResult.firstControlBreachLabel}</strong> ({forecastResult.firstControlBreachDirection} the limit).
+                    The process is drifting out of statistical control — investigate assignable causes.
+                  </span>
+                </div>
+              )}
+              {/* Spec limit breach alert */}
+              {forecastResult.specBreachCount > 0 && (
+                <div className="bg-orange-500/10 border border-orange-500/20 rounded-xl px-4 py-3 text-orange-300 text-xs leading-relaxed flex items-start gap-2">
+                  <span className="text-orange-400 text-base mt-[-1px]">⚠</span>
+                  <span>
+                    <strong>Spec limit breach predicted.</strong> {forecastResult.specBreachCount} of {forecastResult.points.length} forecast
+                    points exceed USL/LSL. First at <strong>{forecastResult.firstSpecBreachLabel}</strong> ({forecastResult.firstSpecBreachDirection} the limit).
+                    Product may fall outside specification — preemptive adjustment recommended.
+                  </span>
+                </div>
+              )}
+              {/* Combined summary when both types breach */}
+              {forecastResult.controlBreachCount > 0 && forecastResult.specBreachCount > 0 && (
+                <div className="bg-fuchsia-500/10 border border-fuchsia-500/20 rounded-xl px-4 py-3 text-fuchsia-300 text-xs leading-relaxed flex items-start gap-2">
+                  <span className="text-fuchsia-400 text-base mt-[-1px]">⚠⚠</span>
+                  <span>
+                    <strong>Both control and spec breaches predicted.</strong> The process is forecasted to exceed
+                    both statistical control limits and product specifications. Immediate intervention is critical.
+                  </span>
+                </div>
+              )}
             </div>
           )}
 

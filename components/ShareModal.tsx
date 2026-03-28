@@ -40,26 +40,30 @@ useEffect(() => {
       return;
     }
 
-    // Get ALL profiles and filter manually
-    const { data } = await supabase
+    // Server-side filter — efficient and RLS-safe
+    const { data, error } = await supabase
       .from('profiles')
       .select('email')
-      .neq('id', userId);
+      .ilike('email', `%${email}%`)
+      .neq('id', userId)
+      .limit(5);
 
-    if (data) {
-      const filtered = data
-        .filter(p => p.email && p.email.toLowerCase().includes(email.toLowerCase()))
-        .map(p => p.email)
-        .filter(Boolean)
-        .slice(0, 5);
+    if (error) {
+      console.error('Autocomplete error:', error);
+      setEmailSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
 
-      if (filtered.length > 0) {
-        setEmailSuggestions(filtered);
-        setShowSuggestions(true);
-      } else {
-        setEmailSuggestions([]);
-        setShowSuggestions(false);
-      }
+    if (data && data.length > 0) {
+      const suggestions = data
+        .map((p: any) => p.email)
+        .filter(Boolean) as string[];
+      setEmailSuggestions(suggestions);
+      setShowSuggestions(true);
+    } else {
+      setEmailSuggestions([]);
+      setShowSuggestions(false);
     }
   };
 
@@ -82,15 +86,20 @@ useEffect(() => {
       return;
     }
     setIsSharing(true);
-    const result = await shareProject(projectId, userId, email, permission);
+    const result = await shareProject(projectId, userId, email.trim(), permission);
+    setIsSharing(false);
+
     if (result) {
       setEmail("");
       setPermission('viewer');
       setShowSuggestions(false);
       await loadShares();
-      setInfoBox({ type: 'info', message: `Project shared successfully with ${email}!` });
+      setInfoBox({
+        type: 'info',
+        message: `Project shared with ${email.trim()} as ${permission}.`
+      });
     }
-    setIsSharing(false);
+    // If result is null, shareProject already showed an alert with the reason
   };
 
   const handleRemoveShare = async (shareId: string, sharedEmail: string) => {

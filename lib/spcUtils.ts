@@ -71,21 +71,52 @@ function normalCDF(x: number): number {
 
 export function calculateSPCStats(values: number[]): SPCStats {
   if (values.length === 0) {
-    return { mean: 0, sigma: 0, ucl: 0, lcl: 0, zone1Upper: 0, zone1Lower: 0, zone2Upper: 0, zone2Lower: 0 };
+    return {
+      mean: 0, sigma: 0, ucl: 0, lcl: 0,
+      zone1Upper: 0, zone1Lower: 0,
+      zone2Upper: 0, zone2Lower: 0,
+    };
   }
 
-  const n = values.length;
-  const mean = values.reduce((sum, v) => sum + v, 0) / n;
+  // Coerce all values to finite numbers
+  const clean = values.map(v => { const n = Number(v); return isFinite(n) ? n : 0; });
+  const n = clean.length;
+  const mean = clean.reduce((sum, v) => sum + v, 0) / n;
 
-  // Population standard deviation
-  const variance = values.reduce((sum, v) => sum + (v - mean) ** 2, 0) / n;
-  const sigma = Math.sqrt(variance);
+  // ── Sigma estimation ──────────────────────────────────────────────────────
+  // I-MR method: estimate sigma from average Moving Range (ISO 7870-2)
+  // This measures only point-to-point (common cause) variation,
+  // not total variation which includes trends and shifts.
+  let sigma: number;
+
+  if (n >= 2) {
+    // Compute moving ranges: absolute difference between consecutive observations
+    const movingRanges: number[] = [];
+    for (let i = 1; i < n; i++) {
+      movingRanges.push(Math.abs(clean[i] - clean[i - 1]));
+    }
+    const mrBar = movingRanges.reduce((sum, mr) => sum + mr, 0) / movingRanges.length;
+
+    // d2 = 1.128: unbiasing constant for subgroup size n=2 (moving range)
+    // Source: ASTM STP 15D, Montgomery "Introduction to Statistical Quality Control"
+    const d2 = 1.128;
+    sigma = mrBar / d2;
+  } else {
+    // Single point: no variation measurable
+    sigma = 0;
+  }
+
+  // ── Control limits ────────────────────────────────────────────────────────
+  // Store TRUE statistical values — no clamping here.
+  // The UI display layer applies Math.max(0, lcl) for non-negative processes.
+  const ucl = mean + 3 * sigma;
+  const lcl = mean - 3 * sigma;
 
   return {
     mean,
     sigma,
-    ucl: mean + 3 * sigma,
-    lcl: mean - 3 * sigma,
+    ucl,
+    lcl,
     zone1Upper: mean + sigma,
     zone1Lower: mean - sigma,
     zone2Upper: mean + 2 * sigma,
@@ -227,23 +258,33 @@ export function runAllNelsonRules(
   {
     const violating: number[] = [];
     let message = '';
+
     for (let i = 0; i <= n - 14; i++) {
       let alternating = true;
-      for (let j = i; j < i + 13; j++) {
-        const dir1 = values[j + 1] - values[j];
-        const dir2 = j > i ? values[j] - values[j - 1] : -dir1;
-        if (j > i && dir1 * dir2 >= 0) {
+
+      // Check each interior point: the direction must strictly reverse at every step.
+      // A tie (zero difference) is treated as not alternating.
+      for (let j = i + 1; j < i + 13; j++) {
+        const prevDiff = values[j] - values[j - 1];
+        const nextDiff = values[j + 1] - values[j];
+
+        // Same sign OR either is zero = pattern broken
+        if (prevDiff * nextDiff >= 0) {
           alternating = false;
           break;
         }
       }
+
       if (alternating) {
         for (let j = i; j < i + 14; j++) {
           if (!violating.includes(j)) violating.push(j);
         }
-        message = `Alternating pattern from ${labels[i]} to ${labels[i + 13]} — may indicate two alternating sources such as two machines, two operators, or shift changes.`;
+        message = `Alternating pattern from ${labels[i]} to ${labels[i + 13]} — `
+          + `may indicate two alternating sources such as two machines, `
+          + `two operators, or shift changes.`;
       }
     }
+
     results.push({
       ruleNumber: 4,
       name: '14 alternating points',
@@ -363,14 +404,16 @@ export function calculateCapability(
   const cpk = Math.min(cpu, cpl);
   const sigmaLevel = cpk * 3;
 
-  const zUSL = (usl - mean) / sigma;
-  const zLSL = (mean - lsl) / sigma;
-  const ppm = (normalCDF(-Math.abs(zUSL)) + normalCDF(-Math.abs(zLSL))) * 1_000_000;
+  const pAbove = 1 - normalCDF((usl - mean) / sigma);  // P(X > USL)
+  const pBelow = normalCDF((lsl - mean) / sigma);        // P(X < LSL)
+  const ppm = Math.round((pAbove + pBelow) * 1_000_000);
 
   return { cp, cpk, cpu, cpl, sigmaLevel, ppm };
 }
 
 // ─── Forecast / Premortem ────────────────────────────────────────────────────
+
+export type BreachType = 'control' | 'spec' | 'both' | null;
 
 export interface ForecastPoint {
   name: string;
@@ -378,28 +421,51 @@ export interface ForecastPoint {
   upperBand: number;
   lowerBand: number;
   isForecast: true;
-  willBreach: boolean;
+  willBreach: boolean;          // true if ANY limit breached (control OR spec)
   isEarlyWarning: boolean;
+  breachType: BreachType;       // which limits are breached
+  breachesControl: boolean;     // exceeds UCL or LCL
+  breachesSpec: boolean;        // exceeds USL or LSL
 }
 
 export interface ForecastResult {
   points: ForecastPoint[];
   slope: number;
   intercept: number;
+
+  // Total breach count (control OR spec)
   breachCount: number;
   firstBreachLabel: string | null;
   firstBreachDirection: 'above' | 'below' | null;
+
+  // Control limit breaches (UCL/LCL)
+  controlBreachCount: number;
+  firstControlBreachLabel: string | null;
+  firstControlBreachDirection: 'above' | 'below' | null;
+
+  // Spec limit breaches (USL/LSL)
+  specBreachCount: number;
+  firstSpecBreachLabel: string | null;
+  firstSpecBreachDirection: 'above' | 'below' | null;
+
+  // allGreen: true only when NO control AND NO spec breaches
   allGreen: boolean;
+}
+
+export interface SpecLimits {
+  usl: number;
+  lsl: number;
 }
 
 /**
  * Linear-regression based forecast with confidence bands.
  *
- * @param values   – historical numeric values
- * @param labels   – corresponding labels (e.g. "Wk1", "Wk2" …)
- * @param stats    – SPC stats (mean, sigma, ucl, lcl, zones)
- * @param horizon  – how many steps to forecast (default 7)
+ * @param values      – historical numeric values
+ * @param labels      – corresponding labels (e.g. "Wk1", "Wk2" …)
+ * @param stats       – SPC stats (mean, sigma, ucl, lcl, zones)
+ * @param horizon     – how many steps to forecast (default 7)
  * @param confidenceZ – z-value for confidence band (1.96 = 95%, 1.28 = 80%)
+ * @param specLimits  – optional USL/LSL for spec breach detection
  */
 export function calculateForecast(
   values: number[],
@@ -407,83 +473,138 @@ export function calculateForecast(
   stats: SPCStats,
   horizon: number = 7,
   confidenceZ: number = 1.96,
+  specLimits?: SpecLimits,
 ): ForecastResult {
   const n = values.length;
 
   // ── Linear regression (least squares) ──
   let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
   for (let i = 0; i < n; i++) {
-    sumX += i;
-    sumY += values[i];
+    sumX  += i;
+    sumY  += values[i];
     sumXY += i * values[i];
     sumX2 += i * i;
   }
-  const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX) || 0;
-  const intercept = (sumY - slope * sumX) / n || 0;
+  const denom = n * sumX2 - sumX * sumX;
+  const slope     = denom !== 0 ? (n * sumXY - sumX * sumY) / denom : 0;
+  const intercept = (sumY - slope * sumX) / n;
 
-  // Residual standard error
+  // ── Residual standard error ──
   let ssRes = 0;
   for (let i = 0; i < n; i++) {
-    const predicted = intercept + slope * i;
-    ssRes += (values[i] - predicted) ** 2;
+    ssRes += (values[i] - (intercept + slope * i)) ** 2;
   }
   const residualSE = n > 2 ? Math.sqrt(ssRes / (n - 2)) : stats.sigma;
-  const xMean = sumX / n;
+  const xMean      = sumX / n;
 
-  // ── Generate forecast labels ──
-  // Try to detect "Wk12", "Week 12", "W12" pattern and increment
-  const lastLabel = labels[n - 1] ?? '';
-  const weekMatch = lastLabel.match(/^(Wk|Week|W)\s*(\d+)$/i);
+  // ── Label generator ──
+  const lastLabel  = labels[n - 1] ?? '';
+  const weekMatch  = lastLabel.match(/^(Wk|Week|W)\s*(\d+)$/i);
+  const monthMatch = lastLabel.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)$/i);
+  const MONTHS     = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
   function makeLabel(step: number): string {
     if (weekMatch) {
-      const prefix = weekMatch[1];
-      const lastNum = parseInt(weekMatch[2], 10);
-      return `${prefix}${lastNum + step}`;
+      return `${weekMatch[1]}${parseInt(weekMatch[2], 10) + step}`;
+    }
+    if (monthMatch) {
+      const idx = MONTHS.findIndex(m => m.toLowerCase() === lastLabel.toLowerCase());
+      return MONTHS[(idx + step) % 12];
+    }
+    // Try to extract a trailing number from the last label
+    const numMatch = lastLabel.match(/(\d+)$/);
+    if (numMatch) {
+      const prefix = lastLabel.slice(0, lastLabel.length - numMatch[1].length);
+      return `${prefix}${parseInt(numMatch[1], 10) + step}`;
     }
     return `F+${step}`;
   }
 
+  // ── Spec limit values (with safe fallback) ──
+  const usl = specLimits?.usl ?? Infinity;
+  const lsl = specLimits?.lsl ?? -Infinity;
+  const hasSpecLimits = specLimits != null &&
+    isFinite(specLimits.usl) &&
+    isFinite(specLimits.lsl) &&
+    specLimits.usl > specLimits.lsl;
+
   // ── Build forecast points ──
   const points: ForecastPoint[] = [];
-  let firstBreachLabel: string | null = null;
+
+  let firstBreachLabel: string | null            = null;
   let firstBreachDirection: 'above' | 'below' | null = null;
-  let breachCount = 0;
+
+  let controlBreachCount = 0;
+  let firstControlBreachLabel: string | null            = null;
+  let firstControlBreachDirection: 'above' | 'below' | null = null;
+
+  let specBreachCount = 0;
+  let firstSpecBreachLabel: string | null            = null;
+  let firstSpecBreachDirection: 'above' | 'below' | null = null;
 
   for (let step = 1; step <= horizon; step++) {
-    const x = n - 1 + step; // index relative to start of historical data
+    const x         = n - 1 + step;
     const predicted = intercept + slope * x;
 
-    // Prediction interval widens with distance from centroid
-    const hx = 1 / n + ((x - xMean) ** 2) / (sumX2 - n * xMean * xMean);
+    // ── Confidence band (widens with distance from centroid) ──
+    const hx        = 1 / n + ((x - xMean) ** 2) / (sumX2 - n * xMean * xMean);
     const bandWidth = confidenceZ * residualSE * Math.sqrt(1 + hx);
-    const upper = predicted + bandWidth;
-    const lower = predicted - bandWidth;
+    const upperBand = predicted + bandWidth;
+    const lowerBand = predicted - bandWidth;
 
-    // Breach detection: does forecast exceed USL/LSL (stored as ucl/lcl in stats)?
-    const willBreach = predicted > stats.ucl || predicted < stats.lcl;
-    if (willBreach) {
-      breachCount++;
-      if (!firstBreachLabel) {
-        firstBreachLabel = makeLabel(step);
-        firstBreachDirection = predicted > stats.ucl ? 'above' : 'below';
-      }
+    // ── Breach detection ──
+    const breachesControl = predicted > stats.ucl || predicted < stats.lcl;
+    const breachesSpec    = hasSpecLimits && (predicted > usl || predicted < lsl);
+    const willBreach      = breachesControl || breachesSpec;
+
+    // Breach type
+    let breachType: BreachType = null;
+    if (breachesControl && breachesSpec) breachType = 'both';
+    else if (breachesControl)            breachType = 'control';
+    else if (breachesSpec)               breachType = 'spec';
+
+    // Track first overall breach
+    if (willBreach && !firstBreachLabel) {
+      firstBreachLabel     = makeLabel(step);
+      firstBreachDirection = predicted > Math.max(stats.ucl, usl) ? 'above' : 'below';
     }
 
-    // Nelson Rule 5 early warning: point in 2σ zone
-    const isEarlyWarning = !willBreach && (
+    // Track first control breach
+    if (breachesControl && !firstControlBreachLabel) {
+      firstControlBreachLabel     = makeLabel(step);
+      firstControlBreachDirection = predicted > stats.ucl ? 'above' : 'below';
+    }
+
+    // Track first spec breach
+    if (breachesSpec && !firstSpecBreachLabel) {
+      firstSpecBreachLabel     = makeLabel(step);
+      firstSpecBreachDirection = predicted > usl ? 'above' : 'below';
+    }
+
+    if (breachesControl) controlBreachCount++;
+    if (breachesSpec)    specBreachCount++;
+
+    // ── Early warning: in 2σ zone but not yet breaching control limits ──
+    const isEarlyWarning = !breachesControl && (
       predicted > stats.zone2Upper || predicted < stats.zone2Lower
     );
 
     points.push({
       name: makeLabel(step),
       value: predicted,
-      upperBand: upper,
-      lowerBand: lower,
+      upperBand,
+      lowerBand,
       isForecast: true,
       willBreach,
       isEarlyWarning,
+      breachType,
+      breachesControl,
+      breachesSpec,
     });
   }
+
+  const breachCount = points.filter(p => p.willBreach).length;
+  const allGreen    = breachCount === 0;
 
   return {
     points,
@@ -492,6 +613,12 @@ export function calculateForecast(
     breachCount,
     firstBreachLabel,
     firstBreachDirection,
-    allGreen: breachCount === 0,
+    controlBreachCount,
+    firstControlBreachLabel,
+    firstControlBreachDirection,
+    specBreachCount,
+    firstSpecBreachLabel,
+    firstSpecBreachDirection,
+    allGreen,
   };
 }

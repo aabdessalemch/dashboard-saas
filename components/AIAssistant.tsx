@@ -148,17 +148,7 @@ export default function AIAssistant({ isOpen, onClose, onGenerateWidgets, userId
           if (Array.isArray(widgets) && widgets.length > 0) {
             console.log('🎉 Creating widgets on dashboard!');
             onGenerateWidgets(widgets);
-            
-            // ✅ INCREMENT AI USAGE AFTER SUCCESSFUL GENERATION
-            if (userId) {
-              try {
-                const { incrementAIUsage } = await import('@/lib/database');
-                await incrementAIUsage(userId);
-                console.log('✅ AI usage incremented');
-              } catch (err) {
-                console.error('Error incrementing AI usage:', err);
-              }
-            }
+            // AI usage is incremented by handleGenerateWidgets in page.tsx
             
             setMessage("");
             setUploadedImage(null);

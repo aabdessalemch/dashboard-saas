@@ -10,6 +10,18 @@ export interface ProjectShare {
   created_at?: string;
 }
 
+export interface SharedProject {
+  id: string;
+  user_id: string;
+  name: string;
+  created_at?: string;
+  folder_id?: string | null;
+  position?: number;
+  permission: 'viewer' | 'editor';
+  owner_email: string;
+  owner_id: string;
+}
+
 export async function shareProject(
   projectId: string,
   ownerUserId: string,
@@ -18,100 +30,148 @@ export async function shareProject(
 ): Promise<ProjectShare | null> {
   try {
     const cleanEmail = email.trim().toLowerCase();
-    
-    console.log('🔍 Searching for user with email:', cleanEmail);
-    
-    // Try multiple search methods
-    let targetProfile = null;
-    
-    // Method 1: Case-insensitive like
-    const { data: profile1 } = await supabase
+    console.log('🔍 Looking up user:', cleanEmail);
+
+    // Single clean lookup — works once RLS policy is fixed
+    const { data: targetProfile, error: profileError } = await supabase
       .from('profiles')
       .select('id, email')
       .ilike('email', cleanEmail)
       .maybeSingle();
-    
-    if (profile1) {
-      targetProfile = profile1;
-      console.log('✅ Found via ilike:', profile1);
-    }
-    
-    // Method 2: Exact match (case-sensitive)
-    if (!targetProfile) {
-      const { data: profile2 } = await supabase
-        .from('profiles')
-        .select('id, email')
-        .eq('email', cleanEmail)
-        .maybeSingle();
-      
-      if (profile2) {
-        targetProfile = profile2;
-        console.log('✅ Found via exact match:', profile2);
+
+    if (profileError) {
+      console.error('❌ Profile lookup error:', profileError);
+      if (profileError.code === '42501' || profileError.message?.includes('permission')) {
+        alert('Permission error: The profiles table RLS policy needs to be updated. See setup guide.');
+      } else {
+        alert(`Could not find user: ${profileError.message}`);
       }
+      return null;
     }
-    
-    // Method 3: Get all profiles and search manually
+
     if (!targetProfile) {
-      const { data: allProfiles } = await supabase
-        .from('profiles')
-        .select('id, email');
-      
-      console.log('📋 All profiles:', allProfiles);
-      
-      targetProfile = allProfiles?.find(p => 
-        p.email?.toLowerCase() === cleanEmail
+      console.error('❌ User not found:', cleanEmail);
+      alert(
+        `No account found for "${email}".\n\n` +
+        `Make sure:\n` +
+        `• They have signed up at this app\n` +
+        `• You typed the email correctly\n` +
+        `• They used this exact email to sign up`
       );
-      
-      if (targetProfile) {
-        console.log('✅ Found via manual search:', targetProfile);
-      }
+      return null;
     }
-    
-    if (!targetProfile) {
-      console.error('❌ User not found with any method');
-      alert(`User with email "${email}" not found. Make sure they have signed up!`);
+
+    console.log('✅ Found user:', targetProfile.id);
+
+    // Check not sharing with yourself
+    if (targetProfile.id === ownerUserId) {
+      alert('You cannot share a project with yourself.');
       return null;
     }
 
     // Check if already shared
     const { data: existing } = await supabase
       .from('project_shares')
-      .select('*')
+      .select('id')
       .eq('project_id', projectId)
       .eq('shared_with_id', targetProfile.id)
       .maybeSingle();
 
     if (existing) {
-      alert('This project is already shared with this user!');
+      alert('This project is already shared with this user.');
       return null;
     }
 
-    // Create share
-    const { data, error } = await supabase
+    // Create the share record
+    const { data, error: shareError } = await supabase
       .from('project_shares')
       .insert([{
         project_id: projectId,
         owner_id: ownerUserId,
         shared_with_email: cleanEmail,
         shared_with_id: targetProfile.id,
-        permission
+        permission,
       }])
       .select()
       .single();
 
-    if (error) {
-      console.error('❌ Error creating share:', error);
-      alert('Failed to share project. Please try again.');
+    if (shareError) {
+      console.error('❌ Share creation error:', shareError);
+      alert(`Failed to share: ${shareError.message}`);
       return null;
     }
 
-    console.log('✅ Share created successfully:', data);
-    alert(`Successfully shared with ${email}!`);
+    console.log('✅ Share created:', data);
     return data;
-  } catch (err) {
+
+  } catch (err: any) {
     console.error('❌ Exception in shareProject:', err);
-    alert('An error occurred while sharing. Please try again.');
+    alert(`Unexpected error: ${err.message}`);
     return null;
+  }
+}
+
+export async function getSharedProjects(userId: string): Promise<SharedProject[]> {
+  try {
+    console.log('🔍 getSharedProjects called with userId:', userId);
+
+    const { data, error } = await supabase
+      .from('project_shares')
+      .select(`
+        permission,
+        owner_id,
+        projects (
+          id,
+          user_id,
+          name,
+          created_at,
+          folder_id,
+          position
+        )
+      `)
+      .eq('shared_with_id', userId);
+
+    if (error) {
+      console.error('❌ Error fetching shared projects:', error);
+      return [];
+    }
+
+    if (!data || data.length === 0) {
+      console.log('🔍 No shared projects found');
+      return [];
+    }
+
+    // Fetch owner emails separately
+    const ownerIds = [...new Set(data.map((s: any) => s.owner_id))];
+    const { data: ownerProfiles } = await supabase
+      .from('profiles')
+      .select('id, email')
+      .in('id', ownerIds);
+
+    const ownerEmailMap = new Map(
+      (ownerProfiles || []).map((p: any) => [p.id, p.email])
+    );
+
+    const results = data
+      .filter((s: any) => s.projects)
+      .map((s: any) => ({
+        id: s.projects.id,
+        user_id: s.projects.user_id,
+        name: s.projects.name,
+        created_at: s.projects.created_at,
+        folder_id: s.projects.folder_id,
+        position: s.projects.position,
+        permission: s.permission as 'viewer' | 'editor',
+        owner_id: s.owner_id,
+        owner_email: ownerEmailMap.get(s.owner_id) || 'Unknown',
+      }));
+
+    console.log('✅ Shared projects loaded:', results.length);
+    return results;
+
+  } catch (err) {
+    console.error('❌ Exception in getSharedProjects:', err);
+    return [];
   }
 }
 
