@@ -509,6 +509,12 @@ useEffect(() => {
   }, [selectedProjectId]);
 
   useEffect(() => {
+    if (selectedProjectId && !selectedProjectId.startsWith("guest-")) {
+      localStorage.setItem("activeProjectId", selectedProjectId);
+    }
+  }, [selectedProjectId]);
+
+  useEffect(() => {
     userIdRef.current = userId;
   }, [userId]);
 
@@ -562,9 +568,17 @@ console.log('🔗 Shared projects loaded:', userSharedProjects);
       }
     } else {
       setProjects(userProjects);
-      setSelectedProjectId(userProjects[0].id);
-      setSelectedProjectName(userProjects[0].name);
-      const dbWidgets = await getWidgets(userProjects[0].id);
+      const savedProjectId = localStorage.getItem("activeProjectId");
+
+      // Try to find saved project
+      const projectToOpen =
+        userProjects.find(p => p.id === savedProjectId) || userProjects[0];
+
+      setSelectedProjectId(projectToOpen.id);
+      selectedProjectIdRef.current = projectToOpen.id;
+      setSelectedProjectName(projectToOpen.name);
+
+      const dbWidgets = await getWidgets(projectToOpen.id);
       const mappedWidgets = dbWidgets.map(w => ({
         id: w.id, type: w.widget_type, x: w.x, y: w.y, width: w.width, height: w.height,
         gridPosition: 0, zIndex: w.z_index, data: w.data, dbId: w.id, _stableId: w.id,
@@ -843,13 +857,11 @@ const handleProjectsChange = async (updatedProjectsList: Project[]) => {
         p.id === newProj.id ? created : p
       );
       
-      if (newProj.id === selectedProjectId) {
-        console.log('🔄 Updating selectedProjectId to:', created.id);
-        setSelectedProjectId(created.id);
-        selectedProjectIdRef.current = created.id;
-        setSelectedProjectName(created.name);
-        setWidgets([]);
-      }
+      // Always open the newly created project
+      setSelectedProjectId(created.id);
+      selectedProjectIdRef.current = created.id;
+      setSelectedProjectName(created.name);
+      setWidgets([]);
       
       // Update project limit after creation
       const canCreate = await canCreateProject(userId);
