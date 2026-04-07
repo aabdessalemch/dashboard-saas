@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { Plus, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Folder, FolderOpen, LayoutDashboard, X, LogOut, Users, Eye, Edit, GripVertical, Zap, AlertCircle } from "lucide-react";
 import ChatPanel from "./ChatPanel";
 import AuthModal from "./AuthModal";
@@ -80,13 +80,6 @@ export default function Sidebar({
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [isCancelingSubscription, setIsCancelingSubscription] = useState(false);
-  const lastSelectTimeRef = useRef<number>(0);
-  const lastSelectedIdRef = useRef<string>('');
-
-  // Sync lastSelectedIdRef when selectedProjectId prop changes from outside
-  useEffect(() => {
-    lastSelectedIdRef.current = selectedProjectId;
-  }, [selectedProjectId]);
 
   useEffect(() => {
     checkUser();
@@ -167,33 +160,30 @@ export default function Sidebar({
     }
 
     const tempId = `temp-${Date.now()}`;
-    const newProject: Project = { id: tempId, name: "New Project", folder_id: null };
+
+    const newProject: Project = {
+      id: tempId,
+      name: "New Project",
+      folder_id: null
+    };
+
     const updatedProjects = [...projects, newProject];
-    
+
+    // Update UI immediately
     onProjectsChange(updatedProjects);
-    await new Promise(resolve => setTimeout(resolve, 150));
-    
+
+    // ✅ IMPORTANT: Select it immediately
+    onProjectSelect(tempId, "New Project");
+
+    // Enable rename mode
     setEditingProjectId(tempId);
-    setEditingName(newProject.name);
+    setEditingName("New Project");
   };
 
   const handleAddFolder = () => {
     if (!onFolderCreate) return;
     onFolderCreate("New Folder");
   };
-
-  useEffect(() => {
-    if (editingProjectId && editingProjectId.startsWith('temp-')) {
-      const tempProject = projects.find(p => p.id === editingProjectId);
-      if (!tempProject) {
-        const newestProject = projects[projects.length - 1];
-        if (newestProject && !newestProject.id.startsWith('temp-')) {
-          setEditingProjectId(newestProject.id);
-          onProjectSelect(newestProject.id, newestProject.name);
-        }
-      }
-    }
-  }, [projects, editingProjectId, onProjectSelect]);
 
   const handleDeleteProject = (projectId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -224,21 +214,9 @@ export default function Sidebar({
   };
 
   const handleSelectProject = (projectId: string, projectName: string) => {
-    // Don't select while editing a name
     if (editingProjectId || editingFolderId) return;
 
-    // Don't re-select the same project
-    if (projectId === lastSelectedIdRef.current) return;
-
-    // Debounce: ignore clicks within 300ms of the last selection
-    const now = Date.now();
-    if (now - lastSelectTimeRef.current < 300) {
-      console.log('⚡ Project select debounced');
-      return;
-    }
-
-    lastSelectTimeRef.current = now;
-    lastSelectedIdRef.current = projectId;
+    if (projectId === selectedProjectId) return;
 
     onProjectSelect(projectId, projectName);
   };
@@ -254,12 +232,30 @@ export default function Sidebar({
   };
 
   const handleRenameProject = () => {
-    if (editingProjectId && editingName.trim()) {
-      const updatedProjects = projects.map(p => p.id === editingProjectId ? { ...p, name: editingName.trim() } : p);
-      onProjectsChange(updatedProjects);
-      if (onProjectRename) onProjectRename(editingProjectId, editingName.trim());
-      if (editingProjectId === selectedProjectId) onProjectSelect(editingProjectId, editingName.trim());
+    if (!editingProjectId || !editingName.trim()) {
+      setEditingProjectId(null);
+      return;
     }
+
+    const trimmedName = editingName.trim();
+
+    const updatedProjects = projects.map(p =>
+      p.id === editingProjectId
+        ? { ...p, name: trimmedName }
+        : p
+    );
+
+    onProjectsChange(updatedProjects);
+
+    if (onProjectRename && !editingProjectId.startsWith('temp-')) {
+      onProjectRename(editingProjectId, trimmedName);
+    }
+
+    // Update selected project ONLY if it's the same
+    if (editingProjectId === selectedProjectId) {
+      onProjectSelect(editingProjectId, trimmedName);
+    }
+
     setEditingProjectId(null);
     setEditingName("");
   };
